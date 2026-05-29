@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenRouter Model Popularity and Inference Engine Coverage</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d2129; --txt:#e6e9ef;
+    --muted:#9aa3b2; --line:#2a2f3a; --accent:#6ea8fe; --green:#3ddc97;
+    --amber:#f5c451; --red:#f06a6a; --purple:#b794f6;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1060px;margin:0 auto;padding:32px 20px 80px}
+  h1{font-size:28px;margin:0 0 4px}
+  h2{font-size:20px;margin:38px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  h3{font-size:16px;margin:24px 0 8px;color:var(--accent)}
+  .sub{color:var(--muted);margin:0 0 24px}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .lead{background:var(--panel2);border-left:3px solid var(--accent)}
+  .note{background:rgba(61,220,151,.06);border-left:3px solid var(--green)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:8px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  tr:hover td{background:rgba(255,255,255,.02)}
+  .num{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11.5px;font-weight:600;white-space:nowrap}
+  .open{background:rgba(61,220,151,.14);color:var(--green)}
+  .prop{background:rgba(240,106,106,.14);color:var(--red)}
+  .vllm{background:rgba(110,168,254,.16);color:var(--accent)}
+  .triton{background:rgba(183,148,246,.16);color:var(--purple)}
+  .other{background:rgba(245,196,81,.15);color:var(--amber)}
+  .bar-row{display:flex;align-items:center;gap:12px;margin:6px 0}
+  .bar-label{width:120px;color:var(--muted);font-size:13px}
+  .bar-track{flex:1;background:var(--panel2);border-radius:6px;height:22px;overflow:hidden}
+  .bar-fill{height:100%;border-radius:6px;background:linear-gradient(90deg,#3a6df0,#6ea8fe)}
+  .bar-val{width:54px;text-align:right;font-variant-numeric:tabular-nums;color:var(--txt);font-size:13px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}.bar-label{width:90px}}
+  .key{font-size:12.5px;color:var(--muted);margin-top:10px}
+  .key .pill{margin-right:6px}
+  code{background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:12.5px}
+  ul{margin:8px 0 8px 0;padding-left:20px}
+  li{margin:4px 0}
+  .takeaway{font-size:15px}
+  .takeaway b{color:var(--green)}
+  .footnote{color:var(--muted);font-size:12.5px;margin-top:6px}
+  .scroll{max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+  .scroll table{margin-top:0}
+  .scroll thead th{position:sticky;top:0;background:var(--panel);z-index:1;box-shadow:0 1px 0 var(--line)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--muted);word-break:break-all}
+  .count{font-size:12.5px;color:var(--muted);float:right}
+  @media print{
+    body{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .wrap{max-width:none;padding:0 12px}
+    .scroll{max-height:none;overflow:visible;border:none}
+    .scroll thead th{position:static;box-shadow:none}
+    tr{break-inside:avoid}
+    h2{break-after:avoid}
+    .panel,.grid2{break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>What model type is most popular, and which engine can serve it?</h1>
+  <p class="sub">Based on the live OpenRouter catalog sorted by weekly tokens processed,
+    <a href="https://openrouter.ai/models?order=top-weekly">openrouter.ai/models?order=top-weekly</a>
+    (ranking and per-model token volumes from the <code>top-weekly</code> API, 759 models). Snapshot: May 2026. Built for the infaas serving stack (vLLM + Triton).</p>
+
+  <div class="panel lead">
+    <p class="takeaway" style="margin:0">
+      <b>Bottom line:</b> the catalog is overwhelmingly <b>text generation</b> models, and the highest-usage ones
+      are all the same shape: <b>decoder-only, Mixture-of-Experts transformer LLMs</b> built for coding and agentic work.
+      For that dominant class, <b>vLLM is the right single engine</b>: <b>199 of the top 200 open models are vLLM targets</b>
+      (the one exception outputs multiple modalities and routes to Triton). It does not cover image, audio, speech or
+      video models, so a complete platform pairs vLLM with a multi-backend server like <b>Triton</b>.
+    </p>
+  </div>
+
+  <h2>1. Popularity by model category</h2>
+  <p>OpenRouter groups its catalog by output modality. Counts below are from the API <code>modality_counts</code>.
+     Text dominates the catalog by a wide margin, and dominates token volume even more.</p>
+
+  <div class="panel">
+    <div class="bar-row"><div class="bar-label">Text</div><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><div class="bar-val">675</div></div>
+    <div class="bar-row"><div class="bar-label">Image</div><div class="bar-track"><div class="bar-fill" style="width:4.4%"></div></div><div class="bar-val">30</div></div>
+    <div class="bar-row"><div class="bar-label">Embeddings</div><div class="bar-track"><div class="bar-fill" style="width:4.0%"></div></div><div class="bar-val">27</div></div>
+    <div class="bar-row"><div class="bar-label">Video</div><div class="bar-track"><div class="bar-fill" style="width:2.1%"></div></div><div class="bar-val">14</div></div>
+    <div class="bar-row"><div class="bar-label">Speech (TTS)</div><div class="bar-track"><div class="bar-fill" style="width:1.3%"></div></div><div class="bar-val">9</div></div>
+    <div class="bar-row"><div class="bar-label">Transcription</div><div class="bar-track"><div class="bar-fill" style="width:1.3%"></div></div><div class="bar-val">9</div></div>
+    <div class="bar-row"><div class="bar-label">Audio</div><div class="bar-track"><div class="bar-fill" style="width:0.7%"></div></div><div class="bar-val">5</div></div>
+    <div class="bar-row"><div class="bar-label">Rerank</div><div class="bar-track"><div class="bar-fill" style="width:0.4%"></div></div><div class="bar-val">3</div></div>
+    <p class="footnote">Text is ~87% of the catalog (675 of 772). Bars are scaled to the Text count.</p>
+  </div>
+
+  <h2>2. The most-used models (by tokens processed) <span class="count">top 50, scroll</span></h2>
+  <p>Top 50 by weekly tokens processed, the same ranking and figures shown on the OpenRouter page.
+     The "Self-host engine" column is what you would run to serve that model yourself. Proprietary models are API-only.</p>
+
+  <div class="panel note">
+    <p style="margin:0"><b>About the Tokens/wk numbers:</b> these are real, pulled from the <code>analytics</code> block
+      the OpenRouter models API returns alongside the ranking (weekly <code>total_prompt_tokens + total_completion_tokens</code>
+      per model, the exact value rendered on each card). Models showing <code>&mdash;</code> had no measurable traffic in the
+      week, not a missing value.</p>
+  </div>
+
+  <div class="panel">
+  <div class="scroll">
+  <table>
+    <thead>
+      <tr><th>#</th><th>Model</th><th>Author</th><th class="num">Tokens/wk</th><th>Modality (in&rarr;out)</th><th>Weights</th><th>Self-host engine</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>DeepSeek V4 Flash</td><td>DeepSeek</td><td class="num">3.64T</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>2</td><td>Hy3 preview</td><td>tencent</td><td class="num">3.27T</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>3</td><td>Claude Opus 4.7</td><td>Anthropic</td><td class="num">2.74T</td><td class="num">txt+img+file&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>4</td><td>Claude Sonnet 4.6</td><td>Anthropic</td><td class="num">2.12T</td><td class="num">txt+img+file&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>5</td><td>Owl Alpha</td><td>OpenRouter</td><td class="num">1.45T</td><td class="num">txt&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>6</td><td>DeepSeek V4 Pro</td><td>DeepSeek</td><td class="num">1.26T</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>7</td><td>Gemini 3 Flash Preview</td><td>Google</td><td class="num">1.04T</td><td class="num">txt+img+file+aud+vid&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>8</td><td>DeepSeek V3.2</td><td>DeepSeek</td><td class="num">1.01T</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>9</td><td>MiMo-V2.5-Pro</td><td>Xiaomi</td><td class="num">866.1B</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>10</td><td>Nemotron 3 Super (free)</td><td>Nvidia</td><td class="num">23.7B</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>11</td><td>Gemini 2.5 Flash Lite</td><td>Google</td><td class="num">646.9B</td><td class="num">txt+img+file+aud+vid&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>12</td><td>Kimi K2.6</td><td>moonshotai</td><td class="num">634.9B</td><td class="num">txt+img&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>13</td><td>Gemini 2.5 Flash</td><td>Google</td><td class="num">562.5B</td><td class="num">file+img+txt+aud+vid&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>14</td><td>MiniMax M2.7</td><td>MiniMax</td><td class="num">559.6B</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>15</td><td>Gemini 3.5 Flash</td><td>Google</td><td class="num">549.8B</td><td class="num">txt+img+vid+file+aud&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>16</td><td>MiMo-V2.5</td><td>Xiaomi</td><td class="num">529.5B</td><td class="num">txt+aud+img+vid&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>17</td><td>GPT-4o-mini</td><td>OpenAI</td><td class="num">512.0B</td><td class="num">txt+img+file&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>18</td><td>GPT-5.5</td><td>OpenAI</td><td class="num">496.2B</td><td class="num">file+img+txt&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>19</td><td>Claude Opus 4.6</td><td>Anthropic</td><td class="num">480.5B</td><td class="num">txt+img+file&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>20</td><td>Laguna M.1 (free)</td><td>poolside</td><td class="num">148.9M</td><td class="num">txt&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>21</td><td>gpt-oss-120b</td><td>OpenAI</td><td class="num">367.7B</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>22</td><td>GPT-5.4</td><td>OpenAI</td><td class="num">334.7B</td><td class="num">txt+img+file&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>23</td><td>GLM 5.1</td><td>Z.ai</td><td class="num">306.1B</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>24</td><td>Gemini 3.1 Pro Preview</td><td>Google</td><td class="num">297.6B</td><td class="num">aud+file+img+txt+vid&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>25</td><td>Gemini 3.1 Flash Lite</td><td>Google</td><td class="num">276.3B</td><td class="num">txt+img+vid+file+aud&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>26</td><td>Gemini 3.1 Flash Lite Preview</td><td>Google</td><td class="num">269.4B</td><td class="num">txt+img+vid+file+aud&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>27</td><td>Step 3.5 Flash</td><td>stepfun</td><td class="num">243.9B</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>28</td><td>Claude Haiku 4.5</td><td>Anthropic</td><td class="num">242.6B</td><td class="num">txt+img+file&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>29</td><td>Qwen3.6 Plus</td><td>Qwen</td><td class="num">233.8B</td><td class="num">txt+img+vid&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>30</td><td>Gemma 4 31B</td><td>Google</td><td class="num">233.3B</td><td class="num">img+txt+vid&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>31</td><td>GLM 4.7</td><td>Z.ai</td><td class="num">202.3B</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>32</td><td>GPT-5 Mini</td><td>OpenAI</td><td class="num">196.4B</td><td class="num">txt+img+file&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>33</td><td>Gemma 4 26B A4B </td><td>Google</td><td class="num">196.3B</td><td class="num">img+txt+vid&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>34</td><td>Kimi K2.5</td><td>moonshotai</td><td class="num">174.8B</td><td class="num">txt+img&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>35</td><td>Qwen3 235B A22B Instruct 2507</td><td>Qwen</td><td class="num">158.3B</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>36</td><td>GPT-5.4 Mini</td><td>OpenAI</td><td class="num">157.6B</td><td class="num">file+img+txt&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>37</td><td>MiniMax M2.5</td><td>MiniMax</td><td class="num">156.5B</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>38</td><td>Mistral Nemo</td><td>Mistral AI</td><td class="num">146.4B</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>39</td><td>GLM 4.5 Air</td><td>Z.ai</td><td class="num">133.6B</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>40</td><td>GLM 5</td><td>Z.ai</td><td class="num">129.6B</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>41</td><td>Qwen3.5-Flash</td><td>Qwen</td><td class="num">125.6B</td><td class="num">txt+img+vid&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>42</td><td>Claude Sonnet 4.5</td><td>Anthropic</td><td class="num">123.5B</td><td class="num">txt+img+file&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>43</td><td>GPT-5.4 Nano</td><td>OpenAI</td><td class="num">114.7B</td><td class="num">file+img+txt&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>44</td><td>Qwen3.7 Max</td><td>Qwen</td><td class="num">111.9B</td><td class="num">txt&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>45</td><td>GPT-5.3-Codex</td><td>OpenAI</td><td class="num">105.1B</td><td class="num">txt+img+file&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>46</td><td>Qwen3 Embedding 8B</td><td>Qwen</td><td class="num">89.8B</td><td class="num">txt&rarr;embeddings</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>47</td><td>GPT-5</td><td>OpenAI</td><td class="num">85.6B</td><td class="num">txt+img+file&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>48</td><td>Llama 3.1 8B Instruct</td><td>Meta Llama</td><td class="num">85.3B</td><td class="num">txt&rarr;txt</td><td><span class="pill open">open</span></td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>49</td><td>Gemini 2.0 Flash</td><td>Google</td><td class="num">83.5B</td><td class="num">txt+img+file+aud+vid&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+      <tr><td>50</td><td>Ling-2.6-flash</td><td>inclusionai</td><td class="num">80.9B</td><td class="num">txt&rarr;txt</td><td><span class="pill prop">proprietary</span></td><td><span class="pill other">API only</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="key">
+    <span class="pill open">open</span> weights on Hugging Face, self-hostable
+    <span class="pill prop">proprietary</span> closed, vendor API only
+    <span class="pill vllm">vLLM</span> served by vLLM
+    <span class="pill triton">Triton</span> non-LLM modality, multi-backend
+    <span class="pill other">API only</span> not self-hostable
+  </div>
+  <p class="footnote">"open" means the model exposes a Hugging Face weights reference on OpenRouter.
+     A few preview/cloaked entries may be gated despite showing a slug, so confirm the license before deploying.</p>
+  </div>
+
+  <p class="takeaway">Notice the pattern: <b>every open-weight model in the top 50 is a decoder-only
+     (mostly MoE) LLM, and every one of them is a vLLM target.</b> The models vLLM cannot help with here
+     are the proprietary APIs (Claude, Gemini, GPT, Grok, Qwen-Max, Tencent), which no engine can self-host.</p>
+
+  <h2>3. Can one engine serve all of them?</h2>
+  <p>No single engine covers every modality. But coverage maps cleanly onto the category counts from section 1.</p>
+
+  <div class="panel">
+  <table>
+    <thead><tr><th>Modality (count)</th><th>Example models</th><th>Best self-host engine</th><th>vLLM?</th></tr></thead>
+    <tbody>
+      <tr><td>Text generation (675)</td><td>DeepSeek, Qwen, Kimi, MiMo, GLM, MiniMax, Llama</td><td><span class="pill vllm">vLLM</span> (also SGLang, TensorRT-LLM)</td><td>Yes</td></tr>
+      <tr><td>Embeddings (27)</td><td>Qwen3 Embedding, Gemini Embedding</td><td><span class="pill vllm">vLLM</span> or TEI / Triton</td><td>Yes</td></tr>
+      <tr><td>Rerank (3)</td><td>cross-encoder rerankers</td><td>TEI / <span class="pill triton">Triton</span></td><td>Partial</td></tr>
+      <tr><td>Transcription / ASR (9)</td><td>Parakeet TDT, Qwen3 ASR, Voxtral</td><td>NVIDIA NeMo / Riva / <span class="pill triton">Triton</span></td><td>No</td></tr>
+      <tr><td>Speech / TTS (9)</td><td>Grok Voice TTS</td><td>specialized / <span class="pill triton">Triton</span></td><td>No</td></tr>
+      <tr><td>Image generation (30)</td><td>Recraft, Grok Imagine</td><td>diffusers / ComfyUI / <span class="pill triton">Triton</span></td><td>No</td></tr>
+      <tr><td>Video (14)</td><td>Grok Imagine Video</td><td>specialized / <span class="pill triton">Triton</span></td><td>No</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h3>Where vLLM wins</h3>
+      <ul>
+        <li>Purpose-built for <b>decoder-only causal LMs</b>, dense and MoE.</li>
+        <li>PagedAttention, continuous batching, tensor and pipeline parallelism.</li>
+        <li>FP8 / AWQ / GPTQ quantization, speculative decoding.</li>
+        <li>Covers the entire <b>Text</b> category, ~87% of models and the overwhelming majority of tokens.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Where vLLM stops</h3>
+      <ul>
+        <li>No image, audio, speech, or video generation.</li>
+        <li>Brand-new architectures need explicit modeling code, so day-one support is not guaranteed.</li>
+        <li>GGUF / CPU / edge serving is not its focus (use llama.cpp).</li>
+        <li>Classic CV / classification / ONNX / TensorRT models are out of scope (use Triton).</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>4. Open models only, by tokens processed <span class="count">top 200, scroll</span></h2>
+  <p>The top 200 self-hostable (open-weight) models, sorted by weekly tokens processed exactly like the OpenRouter page,
+     proprietary API-only entries removed. This is the realistic "what could we actually serve" set. The HF slug is the
+     Hugging Face repo you would pull weights from. <b>199 of these 200 are vLLM-servable;</b> the lone exception outputs
+     extra modalities and routes through Triton.</p>
+
+  <div class="panel">
+  <div class="scroll">
+  <table>
+    <thead>
+      <tr><th>#</th><th>Model</th><th>Author</th><th class="num">Tokens/wk</th><th>Modality (in&rarr;out)</th><th>HF slug</th><th>vLLM?</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>DeepSeek V4 Flash</td><td>DeepSeek</td><td class="num">3.64T</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-V4-Flash</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>2</td><td>Hy3 preview</td><td>tencent</td><td class="num">3.27T</td><td class="num">txt&rarr;txt</td><td class="mono">tencent/Hy3-preview</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>3</td><td>DeepSeek V4 Pro</td><td>DeepSeek</td><td class="num">1.26T</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-V4-Pro</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>4</td><td>DeepSeek V3.2</td><td>DeepSeek</td><td class="num">1.01T</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-V3.2</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>5</td><td>MiMo-V2.5-Pro</td><td>Xiaomi</td><td class="num">866.1B</td><td class="num">txt&rarr;txt</td><td class="mono">XiaomiMiMo/MiMo-V2.5-Pro</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>6</td><td>Nemotron 3 Super (free)</td><td>Nvidia</td><td class="num">23.7B</td><td class="num">txt&rarr;txt</td><td class="mono">nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>7</td><td>Kimi K2.6</td><td>moonshotai</td><td class="num">634.9B</td><td class="num">txt+img&rarr;txt</td><td class="mono">moonshotai/Kimi-K2.6</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>8</td><td>MiniMax M2.7</td><td>MiniMax</td><td class="num">559.6B</td><td class="num">txt&rarr;txt</td><td class="mono">MiniMaxAI/MiniMax-M2.7</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>9</td><td>MiMo-V2.5</td><td>Xiaomi</td><td class="num">529.5B</td><td class="num">txt+aud+img+vid&rarr;txt</td><td class="mono">XiaomiMiMo/MiMo-V2.5</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>10</td><td>gpt-oss-120b</td><td>OpenAI</td><td class="num">367.7B</td><td class="num">txt&rarr;txt</td><td class="mono">openai/gpt-oss-120b</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>11</td><td>GLM 5.1</td><td>Z.ai</td><td class="num">306.1B</td><td class="num">txt&rarr;txt</td><td class="mono">zai-org/GLM-5.1</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>12</td><td>Step 3.5 Flash</td><td>stepfun</td><td class="num">243.9B</td><td class="num">txt&rarr;txt</td><td class="mono">stepfun-ai/Step-3.5-Flash</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>13</td><td>Gemma 4 31B</td><td>Google</td><td class="num">233.3B</td><td class="num">img+txt+vid&rarr;txt</td><td class="mono">google/gemma-4-31B-it</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>14</td><td>GLM 4.7</td><td>Z.ai</td><td class="num">202.3B</td><td class="num">txt&rarr;txt</td><td class="mono">zai-org/GLM-4.7</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>15</td><td>Gemma 4 26B A4B </td><td>Google</td><td class="num">196.3B</td><td class="num">img+txt+vid&rarr;txt</td><td class="mono">google/gemma-4-26B-A4B-it</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>16</td><td>Kimi K2.5</td><td>moonshotai</td><td class="num">174.8B</td><td class="num">txt+img&rarr;txt</td><td class="mono">moonshotai/Kimi-K2.5</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>17</td><td>Qwen3 235B A22B Instruct 2507</td><td>Qwen</td><td class="num">158.3B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen3-235B-A22B-Instruct-2507</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>18</td><td>MiniMax M2.5</td><td>MiniMax</td><td class="num">156.5B</td><td class="num">txt&rarr;txt</td><td class="mono">MiniMaxAI/MiniMax-M2.5</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>19</td><td>Mistral Nemo</td><td>Mistral AI</td><td class="num">146.4B</td><td class="num">txt&rarr;txt</td><td class="mono">mistralai/Mistral-Nemo-Instruct-2407</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>20</td><td>GLM 4.5 Air</td><td>Z.ai</td><td class="num">133.6B</td><td class="num">txt&rarr;txt</td><td class="mono">zai-org/GLM-4.5-Air</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>21</td><td>GLM 5</td><td>Z.ai</td><td class="num">129.6B</td><td class="num">txt&rarr;txt</td><td class="mono">zai-org/GLM-5</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>22</td><td>Qwen3 Embedding 8B</td><td>Qwen</td><td class="num">89.8B</td><td class="num">txt&rarr;embeddings</td><td class="mono">Qwen/Qwen3-Embedding-8B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>23</td><td>Llama 3.1 8B Instruct</td><td>Meta Llama</td><td class="num">85.3B</td><td class="num">txt&rarr;txt</td><td class="mono">meta-llama/Meta-Llama-3.1-8B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>24</td><td>MiMo-V2-Flash</td><td>Xiaomi</td><td class="num">77.7B</td><td class="num">txt&rarr;txt</td><td class="mono">XiaomiMiMo/MiMo-V2-Flash</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>25</td><td>Laguna XS.2 (free)</td><td>poolside</td><td class="num">10.9M</td><td class="num">txt&rarr;txt</td><td class="mono">poolside/Laguna-XS.2</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>26</td><td>DeepSeek V3 0324</td><td>DeepSeek</td><td class="num">72.1B</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-V3-0324</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>27</td><td>Qwen3.5 397B A17B</td><td>Qwen</td><td class="num">66.5B</td><td class="num">txt+img+vid&rarr;txt</td><td class="mono">Qwen/Qwen3.5-397B-A17B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>28</td><td>GLM 4.7 Flash</td><td>Z.ai</td><td class="num">65.6B</td><td class="num">txt&rarr;txt</td><td class="mono">zai-org/GLM-4.7-Flash</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>29</td><td>DeepSeek V3.1</td><td>DeepSeek</td><td class="num">58.6B</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-V3.1</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>30</td><td>Qwen3.5-35B-A3B</td><td>Qwen</td><td class="num">52.0B</td><td class="num">txt+img+vid&rarr;txt</td><td class="mono">Qwen/Qwen3.5-35B-A3B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>31</td><td>gpt-oss-20b</td><td>OpenAI</td><td class="num">49.3B</td><td class="num">txt&rarr;txt</td><td class="mono">openai/gpt-oss-20b</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>32</td><td>Qwen3.5-9B</td><td>Qwen</td><td class="num">41.8B</td><td class="num">txt+img+vid&rarr;txt</td><td class="mono">Qwen/Qwen3.5-9B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>33</td><td>Nemotron 3 Nano 30B A3B (free)</td><td>Nvidia</td><td class="num">19.9B</td><td class="num">txt&rarr;txt</td><td class="mono">nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>34</td><td>Mistral Small 3.2 24B</td><td>Mistral AI</td><td class="num">35.0B</td><td class="num">img+txt&rarr;txt</td><td class="mono">mistralai/Mistral-Small-3.2-24B-Instruct-2506</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>35</td><td>Mistral Small 4</td><td>Mistral AI</td><td class="num">33.3B</td><td class="num">txt+img&rarr;txt</td><td class="mono">mistralai/Mistral-Small-4-119B-2603</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>36</td><td>Qwen3.6 35B A3B</td><td>Qwen</td><td class="num">33.1B</td><td class="num">txt+img+vid&rarr;txt</td><td class="mono">Qwen/Qwen3.6-35B-A3B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>37</td><td>MiniMax M2</td><td>MiniMax</td><td class="num">31.5B</td><td class="num">txt&rarr;txt</td><td class="mono">MiniMaxAI/MiniMax-M2</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>38</td><td>DeepSeek V3.1 Terminus</td><td>DeepSeek</td><td class="num">30.4B</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-V3.1-Terminus</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>39</td><td>Llama 4 Maverick</td><td>Meta Llama</td><td class="num">29.1B</td><td class="num">txt+img&rarr;txt</td><td class="mono">meta-llama/Llama-4-Maverick-17B-128E-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>40</td><td>Qwen3.5-27B</td><td>Qwen</td><td class="num">27.8B</td><td class="num">txt+img+vid&rarr;txt</td><td class="mono">Qwen/Qwen3.5-27B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>41</td><td>Qwen3.6 27B</td><td>Qwen</td><td class="num">27.0B</td><td class="num">txt+img+vid&rarr;txt</td><td class="mono">Qwen/Qwen3.6-27B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>42</td><td>Gemma 3 27B</td><td>Google</td><td class="num">26.6B</td><td class="num">txt+img&rarr;txt</td><td class="mono">google/gemma-3-27b-it</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>43</td><td>Qwen3 Next 80B A3B Instruct</td><td>Qwen</td><td class="num">25.5B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen3-Next-80B-A3B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>44</td><td>Llama 3.3 70B Instruct</td><td>Meta Llama</td><td class="num">25.1B</td><td class="num">txt&rarr;txt</td><td class="mono">meta-llama/Llama-3.3-70B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>45</td><td>Kimi K2 0905</td><td>moonshotai</td><td class="num">25.0B</td><td class="num">txt&rarr;txt</td><td class="mono">moonshotai/Kimi-K2-Instruct-0905</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>46</td><td>Qwen3 Coder Next</td><td>Qwen</td><td class="num">23.7B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen3-Coder-Next</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>47</td><td>GLM 4.6</td><td>Z.ai</td><td class="num">23.5B</td><td class="num">txt&rarr;txt</td><td class="mono">zai-org/GLM-4.6</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>48</td><td>DeepSeek V3</td><td>deepseek-ai</td><td class="num">21.7B</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-V3</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>49</td><td>Ministral 3 8B 2512</td><td>Mistral AI</td><td class="num">21.1B</td><td class="num">txt+img&rarr;txt</td><td class="mono">mistralai/Ministral-3-8B-Instruct-2512</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>50</td><td>Qwen3 Coder 480B A35B</td><td>Qwen</td><td class="num">18.6B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen3-Coder-480B-A35B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>51</td><td>Qwen3 32B</td><td>Qwen</td><td class="num">18.6B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen3-32B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>52</td><td>DeepSeek V3.2 Exp</td><td>DeepSeek</td><td class="num">16.6B</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-V3.2-Exp</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>53</td><td>Qwen3 VL 235B A22B Instruct</td><td>Qwen</td><td class="num">14.4B</td><td class="num">txt+img&rarr;txt</td><td class="mono">Qwen/Qwen3-VL-235B-A22B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>54</td><td>Qwen3 Embedding 4B</td><td>Qwen</td><td class="num">13.5B</td><td class="num">txt&rarr;embeddings</td><td class="mono">Qwen/Qwen3-Embedding-4B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>55</td><td>Nemotron Nano 9B V2 (free)</td><td>Nvidia</td><td class="num">561.5M</td><td class="num">txt&rarr;txt</td><td class="mono">nvidia/NVIDIA-Nemotron-Nano-9B-v2</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>56</td><td>R1 0528</td><td>DeepSeek</td><td class="num">12.8B</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-R1-0528</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>57</td><td>Qwen3 30B A3B Instruct 2507</td><td>Qwen</td><td class="num">11.7B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen3-30B-A3B-Instruct-2507</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>58</td><td>Llama 4 Scout</td><td>Meta Llama</td><td class="num">11.7B</td><td class="num">txt+img&rarr;txt</td><td class="mono">meta-llama/Llama-4-Scout-17B-16E-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>59</td><td>Qwen3 8B</td><td>Qwen</td><td class="num">11.7B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen3-8B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>60</td><td>Llama 3.1 70B Instruct</td><td>Meta Llama</td><td class="num">11.6B</td><td class="num">txt&rarr;txt</td><td class="mono">meta-llama/Meta-Llama-3.1-70B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>61</td><td>Qwen3 VL 8B Instruct</td><td>Qwen</td><td class="num">11.4B</td><td class="num">img+txt&rarr;txt</td><td class="mono">Qwen/Qwen3-VL-8B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>62</td><td>Llama 3 8B Lunaris</td><td>Sao10K</td><td class="num">9.2B</td><td class="num">txt&rarr;txt</td><td class="mono">Sao10K/L3-8B-Lunaris-v1</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>63</td><td>Qwen3.5-122B-A10B</td><td>Qwen</td><td class="num">8.4B</td><td class="num">txt+img+vid&rarr;txt</td><td class="mono">Qwen/Qwen3.5-122B-A10B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>64</td><td>Qwen3 VL 30B A3B Instruct</td><td>Qwen</td><td class="num">8.4B</td><td class="num">txt+img&rarr;txt</td><td class="mono">Qwen/Qwen3-VL-30B-A3B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>65</td><td>Qwen3 235B A22B Thinking 2507</td><td>Qwen</td><td class="num">8.2B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen3-235B-A22B-Thinking-2507</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>66</td><td>Gemma 3 12B</td><td>Google</td><td class="num">7.5B</td><td class="num">txt+img&rarr;txt</td><td class="mono">google/gemma-3-12b-it</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>67</td><td>gpt-oss-safeguard-20b</td><td>OpenAI</td><td class="num">6.5B</td><td class="num">txt&rarr;txt</td><td class="mono">openai/gpt-oss-safeguard-20b</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>68</td><td>Gemma 3 4B</td><td>Google</td><td class="num">6.5B</td><td class="num">txt+img&rarr;txt</td><td class="mono">google/gemma-3-4b-it</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>69</td><td>Qwen3 VL 32B Instruct</td><td>Qwen</td><td class="num">6.5B</td><td class="num">txt+img&rarr;txt</td><td class="mono">Qwen/Qwen3-VL-32B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>70</td><td>bge-m3</td><td>baai</td><td class="num">6.1B</td><td class="num">txt&rarr;embeddings</td><td class="mono">BAAI/bge-m3</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>71</td><td>Nemotron Nano 12B 2 VL (free)</td><td>Nvidia</td><td class="num">7.2M</td><td class="num">img+txt+vid&rarr;txt</td><td class="mono">nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>72</td><td>MiniMax M2.1</td><td>MiniMax</td><td class="num">6.0B</td><td class="num">txt&rarr;txt</td><td class="mono">MiniMaxAI/MiniMax-M2.1</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>73</td><td>Qwen2.5 7B Instruct</td><td>Qwen</td><td class="num">5.9B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen2.5-7B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>74</td><td>Devstral 2 2512</td><td>Mistral AI</td><td class="num">5.2B</td><td class="num">txt+file&rarr;txt</td><td class="mono">mistralai/Devstral-2-123B-Instruct-2512</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>75</td><td>Qwen3 Coder 30B A3B Instruct</td><td>Qwen</td><td class="num">5.2B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen3-Coder-30B-A3B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>76</td><td>LFM2-24B-A2B</td><td>Liquid</td><td class="num">5.1B</td><td class="num">txt&rarr;txt</td><td class="mono">LiquidAI/LFM2-24B-A2B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>77</td><td>Qwen2.5 72B Instruct</td><td>Qwen</td><td class="num">5.1B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen2.5-72B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>78</td><td>Ministral 3 14B 2512</td><td>Mistral AI</td><td class="num">5.1B</td><td class="num">txt+img&rarr;txt</td><td class="mono">mistralai/Ministral-3-14B-Instruct-2512</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>79</td><td>Mistral Small 3</td><td>Mistral AI</td><td class="num">4.9B</td><td class="num">txt&rarr;txt</td><td class="mono">mistralai/Mistral-Small-24B-Instruct-2501</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>80</td><td>Kimi K2 0711</td><td>moonshotai</td><td class="num">4.2B</td><td class="num">txt&rarr;txt</td><td class="mono">moonshotai/Kimi-K2-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>81</td><td>R1</td><td>DeepSeek</td><td class="num">4.2B</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-R1</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>82</td><td>Devstral Small 1.1</td><td>Mistral AI</td><td class="num">3.6B</td><td class="num">txt+file&rarr;txt</td><td class="mono">mistralai/Devstral-Small-2507</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>83</td><td>Qwen3 235B A22B</td><td>Qwen</td><td class="num">3.5B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen3-235B-A22B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>84</td><td>Ministral 3 3B 2512</td><td>Mistral AI</td><td class="num">3.2B</td><td class="num">txt+img&rarr;txt</td><td class="mono">mistralai/Ministral-3-3B-Instruct-2512</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>85</td><td>Llama Nemotron Embed VL 1B V2 (free)</td><td>Nvidia</td><td class="num">—</td><td class="num">txt+img&rarr;embeddings</td><td class="mono">nvidia/llama-nemotron-embed-vl-1b-v2</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>86</td><td>Qwen3 14B</td><td>Qwen</td><td class="num">3.0B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen3-14B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>87</td><td>Kimi K2 Thinking</td><td>moonshotai</td><td class="num">2.7B</td><td class="num">txt&rarr;txt</td><td class="mono">moonshotai/Kimi-K2-Thinking</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>88</td><td>Qwen2.5 VL 72B Instruct</td><td>Qwen</td><td class="num">2.6B</td><td class="num">txt+img&rarr;txt</td><td class="mono">Qwen/Qwen2.5-VL-72B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>89</td><td>Qwen3 30B A3B</td><td>Qwen</td><td class="num">2.6B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen3-30B-A3B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>90</td><td>Llama Guard 4 12B</td><td>Meta Llama</td><td class="num">2.2B</td><td class="num">img+txt&rarr;txt</td><td class="mono">meta-llama/Llama-Guard-4-12B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>91</td><td>Trinity Large Thinking</td><td>arcee-ai</td><td class="num">2.2B</td><td class="num">txt&rarr;txt</td><td class="mono">arcee-ai/Trinity-Large-Thinking</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>92</td><td>Hermes 4 70B</td><td>Nous Research</td><td class="num">1.9B</td><td class="num">txt&rarr;txt</td><td class="mono">NousResearch/Hermes-4-70B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>93</td><td>GLM 4.5</td><td>Z.ai</td><td class="num">1.7B</td><td class="num">txt&rarr;txt</td><td class="mono">zai-org/GLM-4.5</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>94</td><td>all-MiniLM-L6-v2</td><td>sentence-transformers</td><td class="num">1.6B</td><td class="num">txt&rarr;embeddings</td><td class="mono">sentence-transformers/all-MiniLM-L6-v2</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>95</td><td>MythoMax 13B</td><td>Gryphe</td><td class="num">1.5B</td><td class="num">txt&rarr;txt</td><td class="mono">Gryphe/MythoMax-L2-13b</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>96</td><td>Cydonia 24B V4.1</td><td>Drummer</td><td class="num">1.5B</td><td class="num">txt&rarr;txt</td><td class="mono">thedrummer/cydonia-24b-v4.1</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>97</td><td>Qwen3 Next 80B A3B Thinking</td><td>Qwen</td><td class="num">1.3B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen3-Next-80B-A3B-Thinking</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>98</td><td>Llama 3.2 3B Instruct</td><td>Meta Llama</td><td class="num">1.3B</td><td class="num">txt&rarr;txt</td><td class="mono">meta-llama/Llama-3.2-3B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>99</td><td>Qwen3 30B A3B Thinking 2507</td><td>Qwen</td><td class="num">1.2B</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen3-30B-A3B-Thinking-2507</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>100</td><td>GTE-Large</td><td>thenlper</td><td class="num">1.1B</td><td class="num">txt&rarr;embeddings</td><td class="mono">thenlper/gte-large</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>101</td><td>DeepSeek V3.1 Nex N1</td><td>nex-agi</td><td class="num">1.1B</td><td class="num">txt&rarr;txt</td><td class="mono">nex-agi/DeepSeek-V3.1-Nex-N1</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>102</td><td>LFM2.5-1.2B-Thinking (free)</td><td>Liquid</td><td class="num">2.3M</td><td class="num">txt&rarr;txt</td><td class="mono">LiquidAI/LFM2.5-1.2B-Thinking</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>103</td><td>Granite 4.1 8B</td><td>ibm-granite</td><td class="num">962.1M</td><td class="num">txt&rarr;txt</td><td class="mono">ibm-granite/granite-4.1-8b</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>104</td><td>Llama 3.2 11B Vision Instruct</td><td>Meta Llama</td><td class="num">927.4M</td><td class="num">txt+img&rarr;txt</td><td class="mono">meta-llama/Llama-3.2-11B-Vision-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>105</td><td>WizardLM-2 8x22B</td><td>Microsoft</td><td class="num">910.6M</td><td class="num">txt&rarr;txt</td><td class="mono">microsoft/WizardLM-2-8x22B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>106</td><td>Mistral Small 3.1 24B</td><td>Mistral AI</td><td class="num">874.0M</td><td class="num">txt+img&rarr;txt</td><td class="mono">mistralai/Mistral-Small-3.1-24B-Instruct-2503</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>107</td><td>Hermes 3 405B Instruct</td><td>Nous Research</td><td class="num">861.5M</td><td class="num">txt&rarr;txt</td><td class="mono">NousResearch/Hermes-3-Llama-3.1-405B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>108</td><td>LFM2.5-1.2B-Instruct (free)</td><td>Liquid</td><td class="num">2.1M</td><td class="num">txt&rarr;txt</td><td class="mono">LiquidAI/LFM2.5-1.2B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>109</td><td>UnslopNemo 12B</td><td>Drummer</td><td class="num">829.7M</td><td class="num">txt&rarr;txt</td><td class="mono">TheDrummer/UnslopNemo-12B-v4.1</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>110</td><td>Multilingual-E5-Large</td><td>intfloat</td><td class="num">803.6M</td><td class="num">txt&rarr;embeddings</td><td class="mono">intfloat/multilingual-e5-large</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>111</td><td>Gemma 3n 4B</td><td>Google</td><td class="num">735.9M</td><td class="num">txt&rarr;txt</td><td class="mono">google/gemma-3n-E4B-it</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>112</td><td>Hermes 3 70B Instruct</td><td>Nous Research</td><td class="num">694.1M</td><td class="num">txt&rarr;txt</td><td class="mono">NousResearch/Hermes-3-Llama-3.1-70B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>113</td><td>Llama 3 8B Instruct</td><td>Meta Llama</td><td class="num">689.9M</td><td class="num">txt&rarr;txt</td><td class="mono">meta-llama/Meta-Llama-3-8B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>114</td><td>Phi 4</td><td>Microsoft</td><td class="num">688.6M</td><td class="num">txt&rarr;txt</td><td class="mono">microsoft/phi-4</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>115</td><td>bge-base-en-v1.5</td><td>baai</td><td class="num">604.8M</td><td class="num">txt&rarr;embeddings</td><td class="mono">BAAI/bge-base-en-v1.5</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>116</td><td>Llama 3.3 Nemotron Super 49B V1.5</td><td>Nvidia</td><td class="num">595.8M</td><td class="num">txt&rarr;txt</td><td class="mono">nvidia/Llama-3_3-Nemotron-Super-49B-v1_5</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>117</td><td>MiniMax-01</td><td>MiniMax</td><td class="num">591.3M</td><td class="num">txt+img&rarr;txt</td><td class="mono">MiniMaxAI/MiniMax-Text-01</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>118</td><td>GLM 4.6V</td><td>Z.ai</td><td class="num">568.2M</td><td class="num">img+txt+vid&rarr;txt</td><td class="mono">zai-org/GLM-4.6V</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>119</td><td>Trinity Mini</td><td>arcee-ai</td><td class="num">518.1M</td><td class="num">txt&rarr;txt</td><td class="mono">arcee-ai/Trinity-Mini</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>120</td><td>Llama 3.2 1B Instruct</td><td>Meta Llama</td><td class="num">450.2M</td><td class="num">txt&rarr;txt</td><td class="mono">meta-llama/Llama-3.2-1B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>121</td><td>Hermes 4 405B</td><td>Nous Research</td><td class="num">439.6M</td><td class="num">txt&rarr;txt</td><td class="mono">NousResearch/Hermes-4-405B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>122</td><td>Rocinante 12B</td><td>Drummer</td><td class="num">404.1M</td><td class="num">txt&rarr;txt</td><td class="mono">TheDrummer/Rocinante-12B-v1.1</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>123</td><td>FLUX.2 Klein 4B</td><td>black-forest-labs</td><td class="num">399.8M</td><td class="num">txt+img&rarr;img</td><td class="mono">black-forest-labs/FLUX.2-klein-4B</td><td><span class="pill other">via Triton</span></td></tr>
+      <tr><td>124</td><td>Granite 4.0 Micro</td><td>ibm-granite</td><td class="num">398.9M</td><td class="num">txt&rarr;txt</td><td class="mono">ibm-granite/granite-4.0-h-micro</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>125</td><td>Skyfall 36B V2</td><td>Drummer</td><td class="num">309.8M</td><td class="num">txt&rarr;txt</td><td class="mono">TheDrummer/Skyfall-36B-v2</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>126</td><td>Qwen3 VL 235B A22B Thinking</td><td>Qwen</td><td class="num">307.9M</td><td class="num">txt+img&rarr;txt</td><td class="mono">Qwen/Qwen3-VL-235B-A22B-Thinking</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>127</td><td>Llama 3.3 Euryale 70B</td><td>Sao10K</td><td class="num">307.4M</td><td class="num">txt&rarr;txt</td><td class="mono">Sao10K/L3.3-70B-Euryale-v2.3</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>128</td><td>Qwen2.5 Coder 32B Instruct</td><td>Qwen</td><td class="num">305.6M</td><td class="num">txt&rarr;txt</td><td class="mono">Qwen/Qwen2.5-Coder-32B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>129</td><td>UI-TARS 7B </td><td>bytedance</td><td class="num">295.5M</td><td class="num">img+txt&rarr;txt</td><td class="mono">ByteDance-Seed/UI-TARS-1.5-7B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>130</td><td>R1 Distill Qwen 32B</td><td>DeepSeek</td><td class="num">289.4M</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-R1-Distill-Qwen-32B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>131</td><td>Qwen3 VL 8B Thinking</td><td>Qwen</td><td class="num">275.0M</td><td class="num">img+txt&rarr;txt</td><td class="mono">Qwen/Qwen3-VL-8B-Thinking</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>132</td><td>Mistral 7B Instruct v0.1</td><td>Mistral AI</td><td class="num">241.6M</td><td class="num">txt&rarr;txt</td><td class="mono">mistralai/Mistral-7B-Instruct-v0.1</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>133</td><td>R1 Distill Llama 70B</td><td>DeepSeek</td><td class="num">219.1M</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-R1-Distill-Llama-70B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>134</td><td>Llama 3.1 Euryale 70B v2.2</td><td>Sao10K</td><td class="num">216.1M</td><td class="num">txt&rarr;txt</td><td class="mono">Sao10K/L3.1-70B-Euryale-v2.2</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>135</td><td>Jamba Large 1.7</td><td>AI21</td><td class="num">202.8M</td><td class="num">txt&rarr;txt</td><td class="mono">ai21labs/AI21-Jamba-Large-1.7</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>136</td><td>Mixtral 8x22B Instruct</td><td>Mistral AI</td><td class="num">196.6M</td><td class="num">txt+file&rarr;txt</td><td class="mono">mistralai/Mixtral-8x22B-Instruct-v0.1</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>137</td><td>Qwen3 VL 30B A3B Thinking</td><td>Qwen</td><td class="num">195.8M</td><td class="num">txt+img&rarr;txt</td><td class="mono">Qwen/Qwen3-VL-30B-A3B-Thinking</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>138</td><td>Voxtral Small 24B 2507</td><td>Mistral AI</td><td class="num">179.7M</td><td class="num">txt+aud+file&rarr;txt</td><td class="mono">mistralai/Voxtral-Small-24B-2507</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>139</td><td>Uncensored (free)</td><td>venice</td><td class="num">2.7M</td><td class="num">txt&rarr;txt</td><td class="mono">cognitivecomputations/Dolphin-Mistral-24B-Venice-Edition</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>140</td><td>ReMM SLERP 13B</td><td>Undi</td><td class="num">170.0M</td><td class="num">txt&rarr;txt</td><td class="mono">Undi95/ReMM-SLERP-L2-13B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>141</td><td>Command A</td><td>Cohere</td><td class="num">162.6M</td><td class="num">txt&rarr;txt</td><td class="mono">CohereForAI/c4ai-command-a-03-2025</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>142</td><td>Gemma 2 27B</td><td>Google</td><td class="num">105.8M</td><td class="num">txt&rarr;txt</td><td class="mono">google/gemma-2-27b-it</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>143</td><td>E5-Large-v2</td><td>intfloat</td><td class="num">101.9M</td><td class="num">txt&rarr;embeddings</td><td class="mono">intfloat/e5-large-v2</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>144</td><td>Llama 3 70B Instruct</td><td>Meta Llama</td><td class="num">100.9M</td><td class="num">txt&rarr;txt</td><td class="mono">meta-llama/Meta-Llama-3-70B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>145</td><td>Phi 4 Mini Instruct</td><td>Microsoft</td><td class="num">90.1M</td><td class="num">txt&rarr;txt</td><td class="mono">microsoft/Phi-4-mini-instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>146</td><td>Magnum v4 72B</td><td>anthracite-org</td><td class="num">64.0M</td><td class="num">txt&rarr;txt</td><td class="mono">anthracite-org/magnum-v4-72b</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>147</td><td>bge-large-en-v1.5</td><td>baai</td><td class="num">63.6M</td><td class="num">txt&rarr;embeddings</td><td class="mono">BAAI/bge-large-en-v1.5</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>148</td><td>GLM 4.5V</td><td>Z.ai</td><td class="num">62.6M</td><td class="num">txt+img&rarr;txt</td><td class="mono">zai-org/GLM-4.5V</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>149</td><td>Rnj 1 Instruct</td><td>essentialai</td><td class="num">51.0M</td><td class="num">txt&rarr;txt</td><td class="mono">EssentialAI/rnj-1-instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>150</td><td>INTELLECT-3</td><td>prime-intellect</td><td class="num">44.9M</td><td class="num">txt&rarr;txt</td><td class="mono">PrimeIntellect/INTELLECT-3-FP8</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>151</td><td>GTE-Base</td><td>thenlper</td><td class="num">38.4M</td><td class="num">txt&rarr;embeddings</td><td class="mono">thenlper/gte-base</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>152</td><td>Llama 3 Euryale 70B v2.1</td><td>Sao10K</td><td class="num">34.1M</td><td class="num">txt&rarr;txt</td><td class="mono">Sao10K/L3-70B-Euryale-v2.1</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>153</td><td>all-MiniLM-L12-v2</td><td>sentence-transformers</td><td class="num">29.0M</td><td class="num">txt&rarr;embeddings</td><td class="mono">sentence-transformers/all-MiniLM-L12-v2</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>154</td><td>ERNIE 4.5 300B A47B </td><td>baidu</td><td class="num">27.9M</td><td class="num">txt&rarr;txt</td><td class="mono">baidu/ERNIE-4.5-300B-A47B-PT</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>155</td><td>Hermes 2 Pro - Llama-3 8B</td><td>Nous Research</td><td class="num">26.0M</td><td class="num">txt&rarr;txt</td><td class="mono">NousResearch/Hermes-2-Pro-Llama-3-8B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>156</td><td>ERNIE 4.5 VL 424B A47B </td><td>baidu</td><td class="num">21.3M</td><td class="num">img+txt&rarr;txt</td><td class="mono">baidu/ERNIE-4.5-VL-424B-A47B-PT</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>157</td><td>Hunyuan A13B Instruct</td><td>tencent</td><td class="num">20.2M</td><td class="num">txt&rarr;txt</td><td class="mono">tencent/Hunyuan-A13B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>158</td><td>Aion-1.0-Mini</td><td>Aion Labs</td><td class="num">13.9M</td><td class="num">txt&rarr;txt</td><td class="mono">FuseAI/FuseO1-DeepSeekR1-QwQ-SkyT1-32B-Preview</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>159</td><td>all-mpnet-base-v2</td><td>sentence-transformers</td><td class="num">6.8M</td><td class="num">txt&rarr;embeddings</td><td class="mono">sentence-transformers/all-mpnet-base-v2</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>160</td><td>Reka Edge</td><td>rekaai</td><td class="num">5.5M</td><td class="num">img+txt+vid&rarr;txt</td><td class="mono">RekaAI/reka-edge-2603</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>161</td><td>E5-Base-v2</td><td>intfloat</td><td class="num">4.7M</td><td class="num">txt&rarr;embeddings</td><td class="mono">intfloat/e5-base-v2</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>162</td><td>Llama 3.1 70B Hanami x1</td><td>Sao10K</td><td class="num">4.4M</td><td class="num">txt&rarr;txt</td><td class="mono">Sao10K/L3.1-70B-Hanami-x1</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>163</td><td>Reka Flash 3</td><td>rekaai</td><td class="num">2.8M</td><td class="num">txt&rarr;txt</td><td class="mono">RekaAI/reka-flash-3</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>164</td><td>multi-qa-mpnet-base-dot-v1</td><td>sentence-transformers</td><td class="num">2.4M</td><td class="num">txt&rarr;embeddings</td><td class="mono">sentence-transformers/multi-qa-mpnet-base-dot-v1</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>165</td><td>paraphrase-MiniLM-L6-v2</td><td>sentence-transformers</td><td class="num">1.4M</td><td class="num">txt&rarr;embeddings</td><td class="mono">sentence-transformers/paraphrase-MiniLM-L6-v2</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>166</td><td>Olmo 3 32B Think</td><td>Ai2</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">allenai/Olmo-3-32B-Think</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>167</td><td>ERNIE 4.5 21B A3B Thinking</td><td>baidu</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">baidu/ERNIE-4.5-21B-A3B-Thinking</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>168</td><td>ERNIE 4.5 21B A3B</td><td>baidu</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">baidu/ERNIE-4.5-21B-A3B-PT</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>169</td><td>ERNIE 4.5 VL 28B A3B</td><td>baidu</td><td class="num">—</td><td class="num">txt+img&rarr;txt</td><td class="mono">baidu/ERNIE-4.5-VL-28B-A3B-PT</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>170</td><td>CodeLLaMa 7B Instruct Solidity</td><td>alfredpros</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">AlfredPros/CodeLlama-7b-Instruct-Solidity</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>171</td><td>Llama Guard 3 8B</td><td>Meta Llama</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">meta-llama/Llama-Guard-3-8B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>172</td><td>Tongyi DeepResearch 30B A3B</td><td>alibaba</td><td class="num">170.6M</td><td class="num">txt&rarr;txt</td><td class="mono">Alibaba-NLP/Tongyi-DeepResearch-30B-A3B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>173</td><td>Trinity Large Preview</td><td>arcee-ai</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">arcee-ai/Trinity-Large-Preview</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>174</td><td>Molmo2 8B</td><td>Ai2</td><td class="num">—</td><td class="num">txt+img+vid&rarr;txt</td><td class="mono">allenai/Molmo2-8B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>175</td><td>Olmo 3.1 32B Instruct</td><td>Ai2</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">allenai/Olmo-3.1-32B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>176</td><td>Olmo 3.1 32B Think</td><td>Ai2</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">allenai/Olmo-3.1-32B-Think</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>177</td><td>DeepSeek V3.2 Speciale</td><td>DeepSeek</td><td class="num">0</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-V3.2-Speciale</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>178</td><td>Olmo 3 7B Instruct</td><td>Ai2</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">allenai/Olmo-3-7B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>179</td><td>Olmo 3 7B Think</td><td>Ai2</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">allenai/Olmo-3-7B-Think</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>180</td><td>Qwen3 Embedding 0.6B</td><td>Qwen</td><td class="num">—</td><td class="num">txt&rarr;embeddings</td><td class="mono">Qwen/Qwen3-Embedding-0.6B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>181</td><td>LFM2-8B-A1B</td><td>Liquid</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">LiquidAI/LFM2-8B-A1B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>182</td><td>LFM2-2.6B</td><td>Liquid</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">LiquidAI/LFM2-2.6B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>183</td><td>Cogito V2 Preview Llama 405B</td><td>deepcogito</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">deepcogito/cogito-v2-preview-llama-405B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>184</td><td>AFM 4.5B</td><td>arcee-ai</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">arcee-ai/AFM-4.5B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>185</td><td>InternVL3 78B</td><td>opengvlab</td><td class="num">—</td><td class="num">img+txt&rarr;txt</td><td class="mono">OpenGVLab/InternVL3-78B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>186</td><td>LongCat Flash Chat</td><td>meituan</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">meituan-longcat/LongCat-Flash-Chat</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>187</td><td>Seed OSS 36B Instruct</td><td>bytedance</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">ByteDance-Seed/Seed-OSS-36B-Instruct</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>188</td><td>Cogito V2 Preview Llama 70B</td><td>deepcogito</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">deepcogito/cogito-v2-preview-llama-70B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>189</td><td>Cogito V2 Preview Llama 109B</td><td>deepcogito</td><td class="num">—</td><td class="num">img+txt&rarr;txt</td><td class="mono">deepcogito/cogito-v2-preview-llama-109B-MoE</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>190</td><td>Cogito V2 Preview Deepseek 671B</td><td>deepcogito</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">deepcogito/cogito-v2-preview-deepseek-671B-MoE</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>191</td><td>Step3</td><td>stepfun-ai</td><td class="num">—</td><td class="num">img+txt&rarr;txt</td><td class="mono">stepfun-ai/step3</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>192</td><td>DeepSeek V3.1 Base</td><td>DeepSeek</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-V3.1-Base</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>193</td><td>Jamba Mini 1.7</td><td>AI21</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">ai21labs/AI21-Jamba-Mini-1.7</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>194</td><td>GLM 4.1V 9B Thinking</td><td>thudm</td><td class="num">—</td><td class="num">img+txt&rarr;txt</td><td class="mono">THUDM/GLM-4.1V-9B-Thinking</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>195</td><td>Gemma 3n 2B</td><td>Google</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">google/gemma-3n-E2B-it</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>196</td><td>DeepSeek R1T2 Chimera</td><td>tngtech</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">tngtech/DeepSeek-TNG-R1T2-Chimera</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>197</td><td>Kimi Dev 72B</td><td>moonshotai</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">moonshotai/Kimi-Dev-72B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>198</td><td>Magistral Small 2506</td><td>Mistral AI</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">mistralai/Magistral-Small-2506</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>199</td><td>Dobby Mini Plus Llama 3.1 8B</td><td>sentientagi</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">SentientAGI/Dobby-Mini-Unhinged-Plus-Llama-3.1-8B</td><td><span class="pill vllm">yes</span></td></tr>
+      <tr><td>200</td><td>R1 Distill Qwen 7B</td><td>DeepSeek</td><td class="num">—</td><td class="num">txt&rarr;txt</td><td class="mono">deepseek-ai/DeepSeek-R1-Distill-Qwen-7B</td><td><span class="pill vllm">yes</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="footnote">386 open models exist in the full catalog; this shows the 200 most-used. 166 of these 200 had
+     measurable weekly token traffic; <code>&mdash;</code> marks models with no significant usage in the window (the long tail),
+     not a missing value. Ranking and tokens are the live <code>top-weekly</code> figures.</p>
+  </div>
+
+  <h2>5. Engine coverage of the open models</h2>
+  <p>How much of the open-model set can each self-hosted engine run? At the <b>catalog level</b>:
+     199 of the top 200 open models are text/embedding decoder LLMs, so <b>vLLM and Triton cover essentially 100%</b>.
+     The matrix below is a finer-grained architecture-compatibility estimate on the <b>top 8</b> open models.
+     <span class="pill open">yes</span> = supported, <span class="pill other">partial</span> = caveats
+     (newer support, text-only on a multimodal model, or impractical size), <span class="pill prop">no</span> = not supported.</p>
+
+  <div class="panel">
+  <table>
+    <thead>
+      <tr><th>Model (top 8 open)</th><th>vLLM</th><th>SGLang</th><th>TensorRT-LLM</th><th>Triton*</th><th>llama.cpp</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>DeepSeek V4 Flash</td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td></tr>
+      <tr><td>DeepSeek V4 Pro</td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill other">partial</span></td></tr>
+      <tr><td>DeepSeek V3.2</td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td></tr>
+      <tr><td>MiMo-V2.5-Pro</td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill other">partial</span></td><td><span class="pill open">yes</span></td><td><span class="pill other">partial</span></td></tr>
+      <tr><td>Nemotron 3 Super</td><td><span class="pill open">yes</span></td><td><span class="pill other">partial</span></td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill prop">no</span></td></tr>
+      <tr><td>Kimi K2.6</td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill other">partial</span></td><td><span class="pill open">yes</span></td><td><span class="pill other">partial</span></td></tr>
+      <tr><td>MiniMax M2.7</td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td></tr>
+      <tr><td>MiMo-V2.5</td><td><span class="pill open">yes</span></td><td><span class="pill open">yes</span></td><td><span class="pill other">partial</span></td><td><span class="pill open">yes</span></td><td><span class="pill other">partial</span></td></tr>
+    </tbody>
+  </table>
+  <p class="footnote">* Triton is a multi-backend server. It covers these by hosting them through its vLLM or TensorRT-LLM backend.</p>
+  </div>
+
+  <h3>Coverage as a percentage of the open-model set</h3>
+  <div class="panel">
+    <h3 style="margin-top:0">Top 200 open models (catalog level)</h3>
+    <div class="bar-row"><div class="bar-label">vLLM</div><div class="bar-track"><div class="bar-fill" style="width:99.5%"></div></div><div class="bar-val">~99%</div></div>
+    <div class="bar-row"><div class="bar-label">Triton*</div><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><div class="bar-val">100%</div></div>
+    <div class="bar-row"><div class="bar-label">SGLang</div><div class="bar-track"><div class="bar-fill" style="width:96%;background:linear-gradient(90deg,#2f9e6e,#3ddc97)"></div></div><div class="bar-val">~96%</div></div>
+    <div class="bar-row"><div class="bar-label">TensorRT-LLM</div><div class="bar-track"><div class="bar-fill" style="width:88%;background:linear-gradient(90deg,#2f9e6e,#3ddc97)"></div></div><div class="bar-val">~88%</div></div>
+    <div class="bar-row"><div class="bar-label">llama.cpp</div><div class="bar-track"><div class="bar-fill" style="width:80%;background:linear-gradient(90deg,#caa23a,#f5c451)"></div></div><div class="bar-val">~80%</div></div>
+    <p class="footnote">vLLM serves 199/200 (one multimodal-output model routes to Triton). Triton covers all via its vLLM backend.
+       SGLang/TensorRT-LLM/llama.cpp percentages are estimates: they handle mainstream decoders well but trail on hybrid
+       (Mamba), multimodal, and the largest MoE checkpoints.</p>
+
+    <h3>Top 8 open models (weighted, finer-grained)</h3>
+    <div class="bar-row"><div class="bar-label">vLLM</div><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><div class="bar-val">100%</div></div>
+    <div class="bar-row"><div class="bar-label">Triton*</div><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><div class="bar-val">100%</div></div>
+    <div class="bar-row"><div class="bar-label">SGLang</div><div class="bar-track"><div class="bar-fill" style="width:94%;background:linear-gradient(90deg,#2f9e6e,#3ddc97)"></div></div><div class="bar-val">94%</div></div>
+    <div class="bar-row"><div class="bar-label">TensorRT-LLM</div><div class="bar-track"><div class="bar-fill" style="width:81%;background:linear-gradient(90deg,#2f9e6e,#3ddc97)"></div></div><div class="bar-val">81%</div></div>
+    <div class="bar-row"><div class="bar-label">llama.cpp</div><div class="bar-track"><div class="bar-fill" style="width:69%;background:linear-gradient(90deg,#caa23a,#f5c451)"></div></div><div class="bar-val">69%</div></div>
+    <p class="footnote">Top-8 weighted (yes=1.0, partial=0.5): vLLM 8.0/8, Triton 8.0/8, SGLang 7.5/8, TensorRT-LLM 6.5/8, llama.cpp 5.5/8.
+       Architecture-compatibility estimates, not measured throughput.</p>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h3>Why vLLM and Triton dominate</h3>
+      <ul>
+        <li>vLLM supports every decoder-only and MoE family in the list, including DeepSeek sparse attention and Nemotron's hybrid Mamba-Transformer.</li>
+        <li>Triton serves all of them by wrapping vLLM (or TensorRT-LLM) as a backend, then adds non-LLM modalities on top.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Why the others fall short</h3>
+      <ul>
+        <li><b>llama.cpp:</b> needs GGUF conversion, drops the multimodal path, struggles with hybrid Mamba (Nemotron), and the largest MoE checkpoints (1.6T-param DeepSeek V4 Pro) are impractical.</li>
+        <li><b>TensorRT-LLM / SGLang:</b> strong on mainstream decoders, but multimodal and brand-new variants lag vLLM's day-one support.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>6. Recommendation for infaas</h2>
+  <div class="panel lead">
+    <ul class="takeaway" style="margin:0">
+      <li><b>vLLM is the primary engine.</b> It serves the model type that dominates usage:
+          open-weight decoder-only MoE text LLMs. 199 of the top 200 open models are vLLM targets.</li>
+      <li><b>Triton is the catch-all second engine.</b> A multi-backend router (ONNX, TensorRT, PyTorch, TF, Python,
+          and a vLLM backend) that absorbs everything vLLM cannot: ASR, TTS, image, video, rerank, classic non-LLM models.</li>
+      <li><b>Proprietary frontier models are out of reach for any self-hosted engine.</b> Claude, Gemini, GPT, Grok,
+          Qwen-Max and Tencent Hy3 are API-only by design, so they are a routing/proxy concern, not a serving one.</li>
+    </ul>
+  </div>
+  <p class="footnote">Source: OpenRouter <a href="https://openrouter.ai/models?order=top-weekly">Models (top-weekly)</a> frontend API,
+     759 models with per-model weekly token volumes from the response's <code>analytics</code> block. Captured May 2026.
+     Open vs proprietary derived from the presence of a Hugging Face weights slug. Engine coverage figures are
+     architecture-compatibility estimates, not measured benchmarks.</p>
+
+</div>
+</body>
+</html>
