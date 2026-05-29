@@ -1,0 +1,381 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hugging Face Trending Models vs Inference Engine Coverage</title>
+<style>
+  :root{--bg:#0f1115;--panel:#171a21;--panel2:#1d2129;--txt:#e6e9ef;--muted:#9aa3b2;--line:#2a2f3a;
+    --accent:#6ea8fe;--green:#3ddc97;--amber:#f5c451;--red:#f06a6a;--purple:#b794f6;--pink:#f48fb1;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1060px;margin:0 auto;padding:32px 20px 80px}
+  h1{font-size:28px;margin:0 0 4px}
+  h2{font-size:20px;margin:38px 0 12px;border-bottom:1px solid var(--line);padding-bottom:6px}
+  h3{font-size:16px;margin:24px 0 8px;color:var(--accent)}
+  .sub{color:var(--muted);margin:0 0 24px}
+  a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:16px 0}
+  .lead{background:var(--panel2);border-left:3px solid var(--accent)}
+  .note{background:rgba(61,220,151,.06);border-left:3px solid var(--green)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:8px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  tr:hover td{background:rgba(255,255,255,.02)}
+  .num{font-variant-numeric:tabular-nums;white-space:nowrap}
+  .pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11.5px;font-weight:600;white-space:nowrap}
+  .vllm{background:rgba(110,168,254,.16);color:var(--accent)}
+  .diff{background:rgba(244,143,177,.16);color:var(--pink)}
+  .speech{background:rgba(61,220,151,.14);color:var(--green)}
+  .cv{background:rgba(245,196,81,.15);color:var(--amber)}
+  .omni{background:rgba(183,148,246,.16);color:var(--purple)}
+  .bar-row{display:flex;align-items:center;gap:12px;margin:6px 0}
+  .bar-label{width:230px;color:var(--txt);font-size:13px}
+  .bar-track{flex:1;background:var(--panel2);border-radius:6px;height:22px;overflow:hidden}
+  .bar-fill{height:100%;border-radius:6px;background:linear-gradient(90deg,#3a6df0,#6ea8fe)}
+  .vllmb{background:linear-gradient(90deg,#3a6df0,#6ea8fe)}
+  .diffb{background:linear-gradient(90deg,#c2557d,#f48fb1)}
+  .speechb{background:linear-gradient(90deg,#2f9e6e,#3ddc97)}
+  .cvb{background:linear-gradient(90deg,#caa23a,#f5c451)}
+  .omnib{background:linear-gradient(90deg,#8b6fd0,#b794f6)}
+  .bar-val{width:42px;text-align:right;font-variant-numeric:tabular-nums;font-size:13px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}.bar-label{width:150px}}
+  .key{font-size:12.5px;color:var(--muted);margin-top:10px}.key .pill{margin-right:6px}
+  code{background:var(--panel2);padding:1px 6px;border-radius:5px;font-size:12.5px}
+  ul{margin:8px 0;padding-left:20px}li{margin:4px 0}
+  .takeaway{font-size:15px}.takeaway b{color:var(--green)}
+  .footnote{color:var(--muted);font-size:12.5px;margin-top:6px}
+  .scroll{max-height:540px;overflow:auto;border:1px solid var(--line);border-radius:10px}
+  .scroll table{margin-top:0}
+  .scroll thead th{position:sticky;top:0;background:var(--panel);z-index:1;box-shadow:0 1px 0 var(--line)}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;word-break:break-all}
+  .count{font-size:12.5px;color:var(--muted);float:right}
+  .big{font-size:34px;font-weight:700}
+  .stat{display:flex;gap:24px;flex-wrap:wrap}
+  .stat>div{flex:1;min-width:150px}
+  @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}.scroll{max-height:none;overflow:visible}.scroll thead th{position:static}tr{break-inside:avoid}.panel,.grid2{break-inside:avoid}}
+</style></head><body><div class="wrap">
+
+  <h1>Hugging Face trending models: which inference engine can run them?</h1>
+  <p class="sub">Top 200 from <a href="https://huggingface.co/models?sort=trending">huggingface.co/models?sort=trending</a>,
+     classified by task (<code>pipeline_tag</code>) and mapped to a serving engine. Data from the HF API
+     (<code>sort=trendingScore</code>). Snapshot: May 2026. Companion to the OpenRouter report, same infaas lens (vLLM + Triton).</p>
+
+  <div class="panel lead">
+    <p class="takeaway" style="margin:0">
+      <b>Bottom line:</b> unlike OpenRouter (which is ~99% chat LLMs), Hugging Face trending is deeply <b>multimodal</b>.
+      Generative text + vision-language models are the largest slice, but image/video generation, speech, and classic CV
+      together are nearly half the list. So <b>vLLM alone serves only ~56% of HF trending</b>. The rest needs a
+      diffusion stack, a speech stack, and Triton for classic CV. A real platform here is <b>multi-engine</b>:
+      vLLM + Triton + diffusers + a Whisper/NeMo speech path.
+    </p>
+  </div>
+
+  <div class="panel">
+    <div class="stat">
+      <div><div class="big" style="color:var(--accent)">56%</div>vLLM-servable (text + vision-language + embeddings)</div>
+      <div><div class="big" style="color:var(--pink)">20%</div>diffusion (image / video generation)</div>
+      <div><div class="big" style="color:var(--green)">11%</div>speech (ASR / TTS / audio)</div>
+      <div><div class="big" style="color:var(--amber)">11%</div>classic CV / encoder / other (Triton)</div>
+    </div>
+    <p class="footnote">Remaining ~2% are any-to-any "omni" models (partial vLLM support). Percentages over the top 200 trending models.</p>
+  </div>
+
+  <h2>1. What tasks are trending? <span class="count">by pipeline_tag</span></h2>
+  <p>Each trending model carries a task tag. Grouped into serving "lanes" (the engine family each task needs):</p>
+  <div class="panel">
+    <div class="bar-row"><div class="bar-label">VLM <span style="color:var(--muted)">(vLLM)</span></div><div class="bar-track"><div class="bar-fill vllmb" style="width:100.0%"></div></div><div class="bar-val">55</div></div>
+    <div class="bar-row"><div class="bar-label">LLM <span style="color:var(--muted)">(vLLM)</span></div><div class="bar-track"><div class="bar-fill vllmb" style="width:92.7%"></div></div><div class="bar-val">51</div></div>
+    <div class="bar-row"><div class="bar-label">Diffusion <span style="color:var(--muted)">(diffusers / ComfyUI)</span></div><div class="bar-track"><div class="bar-fill diffb" style="width:74.5%"></div></div><div class="bar-val">41</div></div>
+    <div class="bar-row"><div class="bar-label">Speech <span style="color:var(--muted)">(Whisper / NeMo / TTS)</span></div><div class="bar-track"><div class="bar-fill speechb" style="width:40.0%"></div></div><div class="bar-val">22</div></div>
+    <div class="bar-row"><div class="bar-label">Other <span style="color:var(--muted)">(Triton)</span></div><div class="bar-track"><div class="bar-fill cvb" style="width:29.1%"></div></div><div class="bar-val">16</div></div>
+    <div class="bar-row"><div class="bar-label">Vision <span style="color:var(--muted)">(Triton (ONNX/PT))</span></div><div class="bar-track"><div class="bar-fill cvb" style="width:9.1%"></div></div><div class="bar-val">5</div></div>
+    <div class="bar-row"><div class="bar-label">Embed <span style="color:var(--muted)">(vLLM / TEI)</span></div><div class="bar-track"><div class="bar-fill vllmb" style="width:9.1%"></div></div><div class="bar-val">5</div></div>
+    <div class="bar-row"><div class="bar-label">Omni <span style="color:var(--muted)">(partial / specialized)</span></div><div class="bar-track"><div class="bar-fill omnib" style="width:7.3%"></div></div><div class="bar-val">4</div></div>
+    <div class="bar-row"><div class="bar-label">Encoder <span style="color:var(--muted)">(Triton / TEI)</span></div><div class="bar-track"><div class="bar-fill cvb" style="width:1.8%"></div></div><div class="bar-val">1</div></div>
+    <p class="footnote">VLM = vision-language (image-text-to-text), LLM = text-generation, Embed = feature-extraction/similarity,
+       Diffusion = image/video generation, Speech = ASR/TTS/audio, Vision/Other = classic CV + uncategorized, Omni = any-to-any.</p>
+  </div>
+
+  <h2>2. Engine coverage</h2>
+  <p>What share of the 200 each serving stack can run. No single engine covers everything: this catalog is multimodal by nature.</p>
+  <div class="panel">
+    <div class="bar-row"><div class="bar-label">vLLM <span style="color:var(--muted)">(LLM+VLM+embed)</span></div><div class="bar-track"><div class="bar-fill vllmb" style="width:56%"></div></div><div class="bar-val">56%</div></div>
+    <div class="bar-row"><div class="bar-label">Triton <span style="color:var(--muted)">(multi-backend*)</span></div><div class="bar-track"><div class="bar-fill omnib" style="width:78%"></div></div><div class="bar-val">~78%</div></div>
+    <div class="bar-row"><div class="bar-label">diffusers / ComfyUI</div><div class="bar-track"><div class="bar-fill diffb" style="width:20%"></div></div><div class="bar-val">20%</div></div>
+    <div class="bar-row"><div class="bar-label">Whisper / NeMo (speech)</div><div class="bar-track"><div class="bar-fill speechb" style="width:11%"></div></div><div class="bar-val">11%</div></div>
+    <div class="bar-row"><div class="bar-label">TEI (embeddings/rerank)</div><div class="bar-track"><div class="bar-fill vllmb" style="width:5%"></div></div><div class="bar-val">~5%</div></div>
+    <p class="footnote">* Triton is a multi-backend router: it natively serves LLM/VLM (via its vLLM backend), classic CV and
+       encoders (ONNX/PyTorch), and can wrap diffusion/speech models through its Python backend, though that wrapping is
+       custom work rather than turnkey. The ~78% reflects what is practical out of the box; with Python-backend effort it approaches 100%.</p>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h3>vLLM lane (~56%)</h3>
+      <ul>
+        <li><b>text-generation</b> (51) and <b>image-text-to-text</b> VLMs (55): the bulk, all decoder LLMs/VLMs.</li>
+        <li><b>embeddings</b> / sentence-similarity (5): vLLM pooling mode or TEI.</li>
+        <li>Same engine family as the OpenRouter report. SGLang / TGI / TensorRT-LLM are alternatives.</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Everything vLLM can't do (~44%)</h3>
+      <ul>
+        <li><b>Diffusion (41):</b> text-to-image, image/video generation. Needs diffusers or ComfyUI.</li>
+        <li><b>Speech (22):</b> ASR (Whisper/Parakeet), TTS, audio gen. Needs faster-whisper / NeMo / specialized.</li>
+        <li><b>Classic CV + encoders (22):</b> detection, segmentation, classification, BERT-style. Triton ONNX/PyTorch.</li>
+        <li><b>Omni (4):</b> any-to-any models, partial vLLM support, often specialized runtimes.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>3. Top 200 trending models <span class="count">scroll</span></h2>
+  <p>Ordered by HF trending score. <b>Task</b> is the model's <code>pipeline_tag</code>; <b>Engine</b> is the serving stack it needs.
+     Likes and downloads are live HF figures.</p>
+  <div class="panel">
+  <div class="scroll">
+  <table>
+    <thead><tr><th>#</th><th>Model</th><th>Author</th><th>Task</th><th>Library</th><th class="num">Likes</th><th class="num">Downloads</th><th>Engine</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td class="mono">openbmb/MiniCPM5-1B</td><td>openbmb</td><td>text-generation</td><td>transformers</td><td class="num">525</td><td class="num">23.6K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>2</td><td class="mono">meituan-longcat/LongCat-Video-Avatar-1.5</td><td>meituan-longcat</td><td>text-to-image</td><td>diffusers</td><td class="num">383</td><td class="num">0</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>3</td><td class="mono">bytedance-research/Lance</td><td>bytedance-research</td><td>any-to-any</td><td>Lance</td><td class="num">967</td><td class="num">2.7K</td><td><span class="pill omni">partial / specialized</span></td></tr>
+      <tr><td>4</td><td class="mono">nvidia/LocateAnything-3B</td><td>nvidia</td><td>image-text-to-text</td><td>transformers</td><td class="num">291</td><td class="num">7.9K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>5</td><td class="mono">HauhauCS/Qwen3.6-35B-A3B-Uncensored-HauhauCS-Aggressive</td><td>HauhauCS</td><td>image-text-to-text</td><td>—</td><td class="num">1.0K</td><td class="num">2.1M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>6</td><td class="mono">NemoStation/Marlin-2B</td><td>NemoStation</td><td>video-text-to-text</td><td>transformers</td><td class="num">439</td><td class="num">14.7K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>7</td><td class="mono">deepseek-ai/DeepSeek-V4-Pro</td><td>deepseek-ai</td><td>text-generation</td><td>transformers</td><td class="num">4.4K</td><td class="num">5.8M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>8</td><td class="mono">Supertone/supertonic-3</td><td>Supertone</td><td>text-to-speech</td><td>supertonic</td><td class="num">734</td><td class="num">53.8K</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>9</td><td class="mono">sapientinc/HRM-Text-1B</td><td>sapientinc</td><td>text-generation</td><td>transformers</td><td class="num">403</td><td class="num">131.8K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>10</td><td class="mono">tencent/Hy-MT2-30B-A3B</td><td>tencent</td><td>translation</td><td>transformers</td><td class="num">419</td><td class="num">3.1K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>11</td><td class="mono">Jackrong/Qwopus3.6-27B-v2-GGUF</td><td>Jackrong</td><td>image-text-to-text</td><td>transformers</td><td class="num">178</td><td class="num">29.3K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>12</td><td class="mono">nvidia/PiD</td><td>nvidia</td><td>image-to-image</td><td>pytorch</td><td class="num">168</td><td class="num">389</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>13</td><td class="mono">LiquidAI/LFM2.5-8B-A1B</td><td>LiquidAI</td><td>text-generation</td><td>transformers</td><td class="num">158</td><td class="num">8.9K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>14</td><td class="mono">Jackrong/Qwopus3.6-27B-v2-MTP-GGUF</td><td>Jackrong</td><td>image-text-to-text</td><td>transformers</td><td class="num">153</td><td class="num">85.7K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>15</td><td class="mono">SulphurAI/Sulphur-2-base</td><td>SulphurAI</td><td>text-to-video</td><td>diffusers</td><td class="num">1.4K</td><td class="num">1.5M</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>16</td><td class="mono">unsloth/Qwen3.6-27B-MTP-GGUF</td><td>unsloth</td><td>image-text-to-text</td><td>transformers</td><td class="num">541</td><td class="num">841.1K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>17</td><td class="mono">tencent/Hy-MT2-1.8B</td><td>tencent</td><td>translation</td><td>transformers</td><td class="num">1.1K</td><td class="num">15.8K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>18</td><td class="mono">numind/NuExtract3</td><td>numind</td><td>image-to-text</td><td>transformers</td><td class="num">190</td><td class="num">49.0K</td><td><span class="pill cv">Triton (ONNX/PT)</span></td></tr>
+      <tr><td>19</td><td class="mono">microsoft/Lens</td><td>microsoft</td><td>text-to-image</td><td>diffusers</td><td class="num">140</td><td class="num">1.3K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>20</td><td class="mono">Qwen/Qwen3.6-27B</td><td>Qwen</td><td>image-text-to-text</td><td>transformers</td><td class="num">1.5K</td><td class="num">4.9M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>21</td><td class="mono">OBLITERATUS/Qwen3.6-27B-OBLITERATED</td><td>OBLITERATUS</td><td>text-generation</td><td>transformers</td><td class="num">115</td><td class="num">16.8K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>22</td><td class="mono">openbmb/MiniCPM-V-4.6</td><td>openbmb</td><td>image-text-to-text</td><td>transformers</td><td class="num">1.1K</td><td class="num">428.9K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>23</td><td class="mono">microsoft/Lens-Turbo</td><td>microsoft</td><td>text-to-image</td><td>diffusers</td><td class="num">127</td><td class="num">1.7K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>24</td><td class="mono">circlestone-labs/Anima</td><td>circlestone-labs</td><td>text-to-image</td><td>diffusion-single-file</td><td class="num">1.6K</td><td class="num">723.3K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>25</td><td class="mono">froggeric/Qwen-Fixed-Chat-Templates</td><td>froggeric</td><td>text-generation</td><td>mlx</td><td class="num">450</td><td class="num">0</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>26</td><td class="mono">deepseek-ai/DeepSeek-V4-Flash</td><td>deepseek-ai</td><td>text-generation</td><td>transformers</td><td class="num">1.3K</td><td class="num">3.4M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>27</td><td class="mono">unsloth/Qwen3.6-35B-A3B-MTP-GGUF</td><td>unsloth</td><td>image-text-to-text</td><td>transformers</td><td class="num">408</td><td class="num">726.5K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>28</td><td class="mono">LiquidAI/LFM2.5-8B-A1B-GGUF</td><td>LiquidAI</td><td>text-generation</td><td>—</td><td class="num">85</td><td class="num">5.3K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>29</td><td class="mono">PaddlePaddle/PaddleOCR-VL-1.6</td><td>PaddlePaddle</td><td>image-text-to-text</td><td>PaddleOCR</td><td class="num">89</td><td class="num">1.2K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>30</td><td class="mono">zhen-nan/L2P</td><td>zhen-nan</td><td>other</td><td>—</td><td class="num">78</td><td class="num">0</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>31</td><td class="mono">stepfun-ai/Step-3.7-Flash</td><td>stepfun-ai</td><td>image-text-to-text</td><td>transformers</td><td class="num">78</td><td class="num">1.4K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>32</td><td class="mono">stabilityai/stable-audio-3-medium</td><td>stabilityai</td><td>text-to-audio</td><td>stable-audio-3</td><td class="num">133</td><td class="num">14.1K</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>33</td><td class="mono">pyannote/speaker-diarization-3.1</td><td>pyannote</td><td>automatic-speech-recognition</td><td>pyannote-audio</td><td class="num">2.0K</td><td class="num">9.8M</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>34</td><td class="mono">nvidia/Nemotron-Labs-Diffusion-14B</td><td>nvidia</td><td>text-generation</td><td>transformers</td><td class="num">130</td><td class="num">6.5K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>35</td><td class="mono">Qwen/Qwen3.6-35B-A3B</td><td>Qwen</td><td>image-text-to-text</td><td>transformers</td><td class="num">1.9K</td><td class="num">5.7M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>36</td><td class="mono">openai/privacy-filter</td><td>openai</td><td>token-classification</td><td>transformers</td><td class="num">1.6K</td><td class="num">302.1K</td><td><span class="pill cv">Triton / TEI</span></td></tr>
+      <tr><td>37</td><td class="mono">google/gemma-4-31B-it</td><td>google</td><td>image-text-to-text</td><td>transformers</td><td class="num">2.8K</td><td class="num">11.2M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>38</td><td class="mono">prism-ml/bonsai-image-ternary-4B-gemlite-2bit</td><td>prism-ml</td><td>text-to-image</td><td>diffusers</td><td class="num">61</td><td class="num">0</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>39</td><td class="mono">jedisct1/MiMo-V2.5-coder-Q2</td><td>jedisct1</td><td>text-generation</td><td>llama.cpp</td><td class="num">62</td><td class="num">1.6K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>40</td><td class="mono">openbmb/BitCPM-CANN-8B</td><td>openbmb</td><td>text-generation</td><td>transformers</td><td class="num">97</td><td class="num">3.0K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>41</td><td class="mono">Jackrong/Qwopus3.5-9B-Coder-MTP-GGUF</td><td>Jackrong</td><td>image-text-to-text</td><td>transformers</td><td class="num">120</td><td class="num">82.9K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>42</td><td class="mono">google/gemma-4-E4B-it</td><td>google</td><td>any-to-any</td><td>transformers</td><td class="num">1.1K</td><td class="num">6.3M</td><td><span class="pill omni">partial / specialized</span></td></tr>
+      <tr><td>43</td><td class="mono">OpenMOSS-Team/MOSS-TTS-v1.5</td><td>OpenMOSS-Team</td><td>text-to-speech</td><td>—</td><td class="num">56</td><td class="num">8.3K</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>44</td><td class="mono">openbmb/MiniCPM5-1B-GGUF</td><td>openbmb</td><td>text-generation</td><td>transformers</td><td class="num">114</td><td class="num">14.0K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>45</td><td class="mono">HauhauCS/Gemma-4-E4B-Uncensored-HauhauCS-Aggressive</td><td>HauhauCS</td><td>image-text-to-text</td><td>—</td><td class="num">698</td><td class="num">690.6K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>46</td><td class="mono">Jackrong/Qwopus3.5-9B-Coder-GGUF</td><td>Jackrong</td><td>image-text-to-text</td><td>transformers</td><td class="num">213</td><td class="num">56.9K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>47</td><td class="mono">CohereLabs/command-a-plus-05-2026-w4a4</td><td>CohereLabs</td><td>image-text-to-text</td><td>transformers</td><td class="num">214</td><td class="num">14.3K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>48</td><td class="mono">Kwai-Keye/Keye-VL-2.0-30B-A3B</td><td>Kwai-Keye</td><td>image-text-to-text</td><td>transformers</td><td class="num">52</td><td class="num">318</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>49</td><td class="mono">unsloth/Qwen3.6-35B-A3B-GGUF</td><td>unsloth</td><td>image-text-to-text</td><td>transformers</td><td class="num">1.1K</td><td class="num">2.2M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>50</td><td class="mono">ResembleAI/Dramabox</td><td>ResembleAI</td><td>text-to-speech</td><td>ltx-audio-tts</td><td class="num">272</td><td class="num">1.6K</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>51</td><td class="mono">Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice</td><td>Qwen</td><td>text-to-speech</td><td>—</td><td class="num">1.5K</td><td class="num">1.8M</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>52</td><td class="mono">tencent/Hy-MT2-1.8B-GGUF</td><td>tencent</td><td>other</td><td>—</td><td class="num">72</td><td class="num">17.5K</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>53</td><td class="mono">DavidAU/Qwen3.6-40B-Claude-4.6-Opus-Deckard-Heretic-Uncensored-Thinking-NEO-CODE-Di-IMatrix-MAX-GGUF</td><td>DavidAU</td><td>image-text-to-text</td><td>transformers</td><td class="num">180</td><td class="num">502.0K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>54</td><td class="mono">Lightricks/LTX-2.3</td><td>Lightricks</td><td>image-to-video</td><td>diffusers</td><td class="num">1.3K</td><td class="num">2.3M</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>55</td><td class="mono">zhifeixie/Mega-ASR</td><td>zhifeixie</td><td>automatic-speech-recognition</td><td>—</td><td class="num">72</td><td class="num">0</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>56</td><td class="mono">facebook/sam3</td><td>facebook</td><td>mask-generation</td><td>transformers</td><td class="num">2.1K</td><td class="num">2.3M</td><td><span class="pill cv">Triton (ONNX/PT)</span></td></tr>
+      <tr><td>57</td><td class="mono">moonshotai/Kimi-K2.6</td><td>moonshotai</td><td>image-text-to-text</td><td>transformers</td><td class="num">1.4K</td><td class="num">2.9M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>58</td><td class="mono">openbmb/BitCPM-CANN-8B-gguf</td><td>openbmb</td><td>text-generation</td><td>transformers</td><td class="num">46</td><td class="num">2.6K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>59</td><td class="mono">Comfy-Org/Lens</td><td>Comfy-Org</td><td>text-to-image</td><td>diffusion-single-file</td><td class="num">39</td><td class="num">30.9K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>60</td><td class="mono">HauhauCS/Qwen3.5-9B-Uncensored-HauhauCS-Aggressive</td><td>HauhauCS</td><td>text-generation</td><td>—</td><td class="num">1.4K</td><td class="num">740.4K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>61</td><td class="mono">prism-ml/bonsai-image-ternary-4B-mlx-2bit</td><td>prism-ml</td><td>text-to-image</td><td>diffusers</td><td class="num">37</td><td class="num">0</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>62</td><td class="mono">Tongyi-MAI/Z-Image-Turbo</td><td>Tongyi-MAI</td><td>text-to-image</td><td>diffusers</td><td class="num">4.7K</td><td class="num">1.2M</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>63</td><td class="mono">Jiunsong/supergemma4-26b-uncensored-gguf-v2</td><td>Jiunsong</td><td>text-generation</td><td>—</td><td class="num">694</td><td class="num">179.7K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>64</td><td class="mono">google/gemma-4-26B-A4B-it</td><td>google</td><td>image-text-to-text</td><td>transformers</td><td class="num">1.0K</td><td class="num">10.8M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>65</td><td class="mono">HauhauCS/Qwen3.6-27B-Uncensored-HauhauCS-Aggressive</td><td>HauhauCS</td><td>image-text-to-text</td><td>—</td><td class="num">389</td><td class="num">493.4K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>66</td><td class="mono">meta-llama/Llama-3.1-8B-Instruct</td><td>meta-llama</td><td>text-generation</td><td>transformers</td><td class="num">5.9K</td><td class="num">10.4M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>67</td><td class="mono">hexgrad/Kokoro-82M</td><td>hexgrad</td><td>text-to-speech</td><td>—</td><td class="num">6.2K</td><td class="num">12.3M</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>68</td><td class="mono">antirez/deepseek-v4-gguf</td><td>antirez</td><td>text-generation</td><td>gguf</td><td class="num">195</td><td class="num">442.9K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>69</td><td class="mono">TencentARC/Pixal3D</td><td>TencentARC</td><td>image-to-3d</td><td>—</td><td class="num">220</td><td class="num">0</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>70</td><td class="mono">Efficient-Large-Model/SANA-WM_bidirectional</td><td>Efficient-Large-Model</td><td>image-to-video</td><td>diffusers</td><td class="num">114</td><td class="num">0</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>71</td><td class="mono">fal/Qwen-Image-Edit-2511-Multiple-Angles-LoRA</td><td>fal</td><td>image-to-image</td><td>diffusers</td><td class="num">1.4K</td><td class="num">53.9K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>72</td><td class="mono">dealignai/Gemma-4-31B-JANG_4M-CRACK</td><td>dealignai</td><td>image-text-to-text</td><td>mlx</td><td class="num">1.6K</td><td class="num">65.4K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>73</td><td class="mono">DavidAU/Qwen3.6-27B-Heretic-Uncensored-FINETUNE-NEO-CODE-Di-IMatrix-MAX-GGUF</td><td>DavidAU</td><td>image-text-to-text</td><td>—</td><td class="num">243</td><td class="num">586.9K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>74</td><td class="mono">sentence-transformers/all-MiniLM-L6-v2</td><td>sentence-transformers</td><td>sentence-similarity</td><td>sentence-transformers</td><td class="num">4.9K</td><td class="num">261.7M</td><td><span class="pill vllm">vLLM / TEI</span></td></tr>
+      <tr><td>75</td><td class="mono">k2-fsa/OmniVoice</td><td>k2-fsa</td><td>text-to-speech</td><td>omnivoice</td><td class="num">944</td><td class="num">2.6M</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>76</td><td class="mono">pyannote/segmentation-3.0</td><td>pyannote</td><td>voice-activity-detection</td><td>pyannote-audio</td><td class="num">1.1K</td><td class="num">8.9M</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>77</td><td class="mono">Kijai/LTX2.3_comfy</td><td>Kijai</td><td>text-to-image</td><td>diffusion-single-file</td><td class="num">422</td><td class="num">1.7M</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>78</td><td class="mono">Jackrong/Qwopus3.6-27B-v2</td><td>Jackrong</td><td>image-text-to-text</td><td>transformers</td><td class="num">29</td><td class="num">7.1K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>79</td><td class="mono">OpenMOSS-Team/MOSS-SoundEffect-v2.0</td><td>OpenMOSS-Team</td><td>text-to-audio</td><td>diffusers</td><td class="num">29</td><td class="num">78</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>80</td><td class="mono">stepfun-ai/Step-3.7-Flash-GGUF</td><td>stepfun-ai</td><td>image-text-to-text</td><td>gguf</td><td class="num">29</td><td class="num">476</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>81</td><td class="mono">CohereLabs/command-a-plus-05-2026-bf16</td><td>CohereLabs</td><td>image-text-to-text</td><td>transformers</td><td class="num">128</td><td class="num">18.5K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>82</td><td class="mono">LuffyTheFox/Qwen3.6-35B-A3B-Uncensored-Genesis-V2-APEX-MTP-GGUF</td><td>LuffyTheFox</td><td>image-text-to-text</td><td>—</td><td class="num">29</td><td class="num">40.0K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>83</td><td class="mono">Phr00t/Qwen-Image-Edit-Rapid-AIO</td><td>Phr00t</td><td>text-to-image</td><td>comfyUI</td><td class="num">2.1K</td><td class="num">0</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>84</td><td class="mono">unsloth/gemma-4-26B-A4B-it-GGUF</td><td>unsloth</td><td>image-text-to-text</td><td>—</td><td class="num">791</td><td class="num">2.8M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>85</td><td class="mono">unsloth/Qwen3.6-27B-GGUF</td><td>unsloth</td><td>image-text-to-text</td><td>transformers</td><td class="num">742</td><td class="num">1.7M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>86</td><td class="mono">llmfan46/Qwen3.6-35B-A3B-uncensored-heretic-Native-MTP-Preserved-GGUF</td><td>llmfan46</td><td>image-text-to-text</td><td>transformers</td><td class="num">66</td><td class="num">63.9K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>87</td><td class="mono">Qwen/Qwen-Image-Bench</td><td>Qwen</td><td>image-text-to-text</td><td>transformers</td><td class="num">27</td><td class="num">202</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>88</td><td class="mono">pyannote/speaker-diarization-community-1</td><td>pyannote</td><td>automatic-speech-recognition</td><td>pyannote-audio</td><td class="num">436</td><td class="num">2.8M</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>89</td><td class="mono">vantagewithai/LTX2.3-10Eros-GGUF</td><td>vantagewithai</td><td>image-to-video</td><td>diffusers</td><td class="num">105</td><td class="num">144.1K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>90</td><td class="mono">HauhauCS/Gemma4-26B-A4B-Uncensored-HauhauCS-Balanced</td><td>HauhauCS</td><td>image-text-to-text</td><td>—</td><td class="num">106</td><td class="num">127.9K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>91</td><td class="mono">black-forest-labs/FLUX.1-dev</td><td>black-forest-labs</td><td>text-to-image</td><td>diffusers</td><td class="num">13.0K</td><td class="num">716.0K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>92</td><td class="mono">black-forest-labs/FLUX.2-klein-9B</td><td>black-forest-labs</td><td>image-to-image</td><td>diffusers</td><td class="num">793</td><td class="num">137.3K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>93</td><td class="mono">zai-org/GLM-OCR</td><td>zai-org</td><td>image-text-to-text</td><td>transformers</td><td class="num">1.8K</td><td class="num">5.4M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>94</td><td class="mono">RuneXX/LTX-2.3-Workflows</td><td>RuneXX</td><td>image-to-video</td><td>—</td><td class="num">640</td><td class="num">0</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>95</td><td class="mono">facebook/VGGT-Omega</td><td>facebook</td><td>other</td><td>—</td><td class="num">117</td><td class="num">0</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>96</td><td class="mono">LatitudeGames/Equinox-31B</td><td>LatitudeGames</td><td>text-generation</td><td>—</td><td class="num">47</td><td class="num">998</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>97</td><td class="mono">facebook/sam3.1</td><td>facebook</td><td>mask-generation</td><td>checkpoint</td><td class="num">306</td><td class="num">264.6K</td><td><span class="pill cv">Triton (ONNX/PT)</span></td></tr>
+      <tr><td>98</td><td class="mono">zai-org/GLM-5.1</td><td>zai-org</td><td>text-generation</td><td>transformers</td><td class="num">1.7K</td><td class="num">140.2K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>99</td><td class="mono">TenStrip/LTX2.3-10Eros</td><td>TenStrip</td><td>image-to-video</td><td>diffusers</td><td class="num">326</td><td class="num">223.5K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>100</td><td class="mono">tencent/Hy-MT2-7B</td><td>tencent</td><td>translation</td><td>transformers</td><td class="num">176</td><td class="num">4.7K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>101</td><td class="mono">Cactus-Compute/needle</td><td>Cactus-Compute</td><td>other</td><td>jax</td><td class="num">140</td><td class="num">505</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>102</td><td class="mono">OBLITERATUS/gemma-4-E4B-it-OBLITERATED</td><td>OBLITERATUS</td><td>text-generation</td><td>—</td><td class="num">673</td><td class="num">333.4K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>103</td><td class="mono">XiaomiMiMo/MiMo-V2.5-Pro</td><td>XiaomiMiMo</td><td>text-generation</td><td>—</td><td class="num">562</td><td class="num">89.1K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>104</td><td class="mono">XiaomiMiMo/MiMo-V2.5</td><td>XiaomiMiMo</td><td>other</td><td>—</td><td class="num">270</td><td class="num">206.8K</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>105</td><td class="mono">Jackrong/Qwopus3.6-35B-A3B-v1-GGUF</td><td>Jackrong</td><td>image-text-to-text</td><td>transformers</td><td class="num">173</td><td class="num">387.8K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>106</td><td class="mono">llmfan46/Qwen3.6-27B-uncensored-heretic-v2-Native-MTP-Preserved-GGUF</td><td>llmfan46</td><td>image-text-to-text</td><td>transformers</td><td class="num">95</td><td class="num">99.3K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>107</td><td class="mono">prism-ml/bonsai-image-binary-4B-gemlite-1bit</td><td>prism-ml</td><td>text-to-image</td><td>diffusers</td><td class="num">24</td><td class="num">0</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>108</td><td class="mono">Qwen/Qwen3.5-9B</td><td>Qwen</td><td>image-text-to-text</td><td>transformers</td><td class="num">1.5K</td><td class="num">8.4M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>109</td><td class="mono">stabilityai/stable-audio-3-small-music</td><td>stabilityai</td><td>text-to-audio</td><td>stable-audio-3</td><td class="num">56</td><td class="num">9.2K</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>110</td><td class="mono">SupraLabs/Supra-50M-Instruct</td><td>SupraLabs</td><td>text-generation</td><td>transformers</td><td class="num">25</td><td class="num">7.1K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>111</td><td class="mono">openai/gpt-oss-120b</td><td>openai</td><td>text-generation</td><td>transformers</td><td class="num">4.8K</td><td class="num">4.8M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>112</td><td class="mono">google/gemma-4-E2B-it</td><td>google</td><td>any-to-any</td><td>transformers</td><td class="num">668</td><td class="num">3.1M</td><td><span class="pill omni">partial / specialized</span></td></tr>
+      <tr><td>113</td><td class="mono">unsloth/gemma-4-E4B-it-GGUF</td><td>unsloth</td><td>image-text-to-text</td><td>—</td><td class="num">453</td><td class="num">1.1M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>114</td><td class="mono">prism-ml/bonsai-image-ternary-4B-unpacked</td><td>prism-ml</td><td>text-to-image</td><td>diffusers</td><td class="num">21</td><td class="num">0</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>115</td><td class="mono">spiritbuun/buun-Qwen3.6-chat_template</td><td>spiritbuun</td><td>text-generation</td><td>—</td><td class="num">22</td><td class="num">0</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>116</td><td class="mono">Kaikaku/epicure-cooc</td><td>Kaikaku</td><td>feature-extraction</td><td>custom</td><td class="num">21</td><td class="num">194</td><td><span class="pill vllm">vLLM / TEI</span></td></tr>
+      <tr><td>117</td><td class="mono">Qwen/Qwen3-Coder-Next</td><td>Qwen</td><td>text-generation</td><td>transformers</td><td class="num">1.4K</td><td class="num">998.3K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>118</td><td class="mono">syvai/cohere-transcribe-diarize</td><td>syvai</td><td>automatic-speech-recognition</td><td>transformers</td><td class="num">21</td><td class="num">527</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>119</td><td class="mono">tencent/Hy-MT2-7B-GGUF</td><td>tencent</td><td>other</td><td>—</td><td class="num">35</td><td class="num">18.8K</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>120</td><td class="mono">FINAL-Bench/Darwin-60B-DUO</td><td>FINAL-Bench</td><td>text-generation</td><td>transformers</td><td class="num">26</td><td class="num">327</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>121</td><td class="mono">openai/whisper-large-v3</td><td>openai</td><td>automatic-speech-recognition</td><td>transformers</td><td class="num">5.8K</td><td class="num">5.3M</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>122</td><td class="mono">black-forest-labs/FLUX.2-dev</td><td>black-forest-labs</td><td>image-to-image</td><td>diffusers</td><td class="num">1.7K</td><td class="num">283.7K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>123</td><td class="mono">lkzd7/WAN2.2_LoraSet_NSFW</td><td>lkzd7</td><td>other</td><td>—</td><td class="num">359</td><td class="num">0</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>124</td><td class="mono">unsloth/gemma-4-E2B-it-GGUF</td><td>unsloth</td><td>image-text-to-text</td><td>—</td><td class="num">219</td><td class="num">1.2M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>125</td><td class="mono">byteshape/Qwen3.6-35B-A3B-MTP-GGUF</td><td>byteshape</td><td>image-text-to-text</td><td>transformers</td><td class="num">45</td><td class="num">25.0K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>126</td><td class="mono">bageldotcom/paris2</td><td>bageldotcom</td><td>image-to-video</td><td>—</td><td class="num">19</td><td class="num">0</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>127</td><td class="mono">Comfy-Org/PixelDiT</td><td>Comfy-Org</td><td>text-to-image</td><td>diffusion-single-file</td><td class="num">19</td><td class="num">13.7K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>128</td><td class="mono">meta-llama/Llama-3.2-1B</td><td>meta-llama</td><td>text-generation</td><td>transformers</td><td class="num">2.4K</td><td class="num">2.2M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>129</td><td class="mono">openbmb/VoxCPM2</td><td>openbmb</td><td>text-to-speech</td><td>voxcpm</td><td class="num">1.3K</td><td class="num">235.4K</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>130</td><td class="mono">MiniMaxAI/MiniMax-M2.7</td><td>MiniMaxAI</td><td>text-generation</td><td>transformers</td><td class="num">1.2K</td><td class="num">1.4M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>131</td><td class="mono">Zyphra/ZAYA1-8B</td><td>Zyphra</td><td>other</td><td>—</td><td class="num">564</td><td class="num">161.1K</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>132</td><td class="mono">openbmb/MiniCPM5-1B-SFT</td><td>openbmb</td><td>text-generation</td><td>transformers</td><td class="num">20</td><td class="num">1.8K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>133</td><td class="mono">llmfan46/G4-MeroMero-26B-A4B-it-uncensored-heretic-GGUF</td><td>llmfan46</td><td>other</td><td>—</td><td class="num">19</td><td class="num">11.0K</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>134</td><td class="mono">meta-llama/Llama-3.2-1B-Instruct</td><td>meta-llama</td><td>text-generation</td><td>transformers</td><td class="num">1.4K</td><td class="num">8.3M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>135</td><td class="mono">Qwen/Qwen3.5-4B</td><td>Qwen</td><td>image-text-to-text</td><td>transformers</td><td class="num">574</td><td class="num">8.6M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>136</td><td class="mono">nvidia/Nemotron-Labs-Diffusion-8B</td><td>nvidia</td><td>text-generation</td><td>transformers</td><td class="num">34</td><td class="num">36.8K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>137</td><td class="mono">facebook/tribev2</td><td>facebook</td><td>other</td><td>—</td><td class="num">550</td><td class="num">201.3K</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>138</td><td class="mono">allura-org/Qwen3.6-35B-A3B-Anko</td><td>allura-org</td><td>text-generation</td><td>—</td><td class="num">23</td><td class="num">72</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>139</td><td class="mono">kohya-ss/Anima-LLLite</td><td>kohya-ss</td><td>other</td><td>—</td><td class="num">99</td><td class="num">0</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>140</td><td class="mono">Jackrong/Qwen3.5-9B-DeepSeek-V4-Flash-GGUF</td><td>Jackrong</td><td>image-text-to-text</td><td>transformers</td><td class="num">188</td><td class="num">555.3K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>141</td><td class="mono">nvidia/GLM-5.1-NVFP4</td><td>nvidia</td><td>text-generation</td><td>Model Optimizer</td><td class="num">20</td><td class="num">8.2K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>142</td><td class="mono">unsloth/Qwen3.5-9B-MTP-GGUF</td><td>unsloth</td><td>image-text-to-text</td><td>transformers</td><td class="num">69</td><td class="num">141.9K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>143</td><td class="mono">Jackrong/Qwopus3.6-35B-A3B-v1-MTP-GGUF</td><td>Jackrong</td><td>image-text-to-text</td><td>transformers</td><td class="num">18</td><td class="num">9.4K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>144</td><td class="mono">avaturn-live/avtr-1</td><td>avaturn-live</td><td>image-to-video</td><td>tensorrt</td><td class="num">17</td><td class="num">164</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>145</td><td class="mono">meta-llama/Llama-3.1-8B</td><td>meta-llama</td><td>text-generation</td><td>transformers</td><td class="num">2.2K</td><td class="num">1.3M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>146</td><td class="mono">meta-llama/Llama-3.2-3B-Instruct</td><td>meta-llama</td><td>text-generation</td><td>transformers</td><td class="num">2.2K</td><td class="num">2.0M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>147</td><td class="mono">Tongyi-MAI/Z-Image</td><td>Tongyi-MAI</td><td>text-to-image</td><td>diffusers</td><td class="num">1.1K</td><td class="num">32.9K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>148</td><td class="mono">Qwen/Qwen3-ASR-1.7B</td><td>Qwen</td><td>automatic-speech-recognition</td><td>—</td><td class="num">834</td><td class="num">2.0M</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>149</td><td class="mono">prism-ml/bonsai-image-binary-4B-mlx-1bit</td><td>prism-ml</td><td>text-to-image</td><td>diffusers</td><td class="num">16</td><td class="num">0</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>150</td><td class="mono">prism-ml/bonsai-image-binary-4B-unpacked</td><td>prism-ml</td><td>text-to-image</td><td>diffusers</td><td class="num">16</td><td class="num">0</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>151</td><td class="mono">black-forest-labs/FLUX.1-schnell</td><td>black-forest-labs</td><td>text-to-image</td><td>diffusers</td><td class="num">5.0K</td><td class="num">541.7K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>152</td><td class="mono">rhasspy/piper-voices</td><td>rhasspy</td><td>other</td><td>—</td><td class="num">530</td><td class="num">0</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>153</td><td class="mono">numind/NuMarkdown-8B-Thinking</td><td>numind</td><td>image-to-text</td><td>transformers</td><td class="num">471</td><td class="num">41.5K</td><td><span class="pill cv">Triton (ONNX/PT)</span></td></tr>
+      <tr><td>154</td><td class="mono">openai/gpt-oss-20b</td><td>openai</td><td>text-generation</td><td>transformers</td><td class="num">4.7K</td><td class="num">8.1M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>155</td><td class="mono">CohereLabs/cohere-transcribe-03-2026</td><td>CohereLabs</td><td>automatic-speech-recognition</td><td>transformers</td><td class="num">964</td><td class="num">316.5K</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>156</td><td class="mono">litert-community/gemma-4-E2B-it-litert-lm</td><td>litert-community</td><td>text-generation</td><td>litert-lm</td><td class="num">225</td><td class="num">1.0M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>157</td><td class="mono">Qwen/Qwen3.6-27B-FP8</td><td>Qwen</td><td>image-text-to-text</td><td>transformers</td><td class="num">238</td><td class="num">7.5M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>158</td><td class="mono">datalab-to/surya-ocr-2</td><td>datalab-to</td><td>image-text-to-text</td><td>transformers</td><td class="num">15</td><td class="num">3.2K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>159</td><td class="mono">AmmarkoV/SAM3DBody-cpp-onnx-models</td><td>AmmarkoV</td><td>other</td><td>—</td><td class="num">17</td><td class="num">0</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>160</td><td class="mono">BAAI/bge-m3</td><td>BAAI</td><td>sentence-similarity</td><td>sentence-transformers</td><td class="num">3.0K</td><td class="num">30.8M</td><td><span class="pill vllm">vLLM / TEI</span></td></tr>
+      <tr><td>161</td><td class="mono">briaai/RMBG-2.0</td><td>briaai</td><td>image-segmentation</td><td>transformers</td><td class="num">1.2K</td><td class="num">713.4K</td><td><span class="pill cv">Triton (ONNX/PT)</span></td></tr>
+      <tr><td>162</td><td class="mono">agents-course/notebooks</td><td>agents-course</td><td>other</td><td>—</td><td class="num">575</td><td class="num">0</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>163</td><td class="mono">Kijai/WanVideo_comfy</td><td>Kijai</td><td>text-to-image</td><td>diffusion-single-file</td><td class="num">2.3K</td><td class="num">4.8M</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>164</td><td class="mono">mistralai/Voxtral-4B-TTS-2603</td><td>mistralai</td><td>text-to-speech</td><td>vllm</td><td class="num">822</td><td class="num">6.7K</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>165</td><td class="mono">nvidia/vgg-ttt</td><td>nvidia</td><td>image-to-3d</td><td>vggttt</td><td class="num">14</td><td class="num">511</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>166</td><td class="mono">google/medgemma-1.5-4b-it</td><td>google</td><td>image-text-to-text</td><td>transformers</td><td class="num">638</td><td class="num">265.2K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>167</td><td class="mono">unsloth/Qwen3-Coder-Next-GGUF</td><td>unsloth</td><td>text-generation</td><td>—</td><td class="num">658</td><td class="num">3.0M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>168</td><td class="mono">HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive</td><td>HauhauCS</td><td>text-generation</td><td>—</td><td class="num">360</td><td class="num">145.4K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>169</td><td class="mono">RunDiffusion/Juggernaut-Z-Image</td><td>RunDiffusion</td><td>text-to-image</td><td>diffusers</td><td class="num">106</td><td class="num">28.4K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>170</td><td class="mono">ponpoke/flux2-klein-9b-uncensored-text-encoder</td><td>ponpoke</td><td>text-to-image</td><td>—</td><td class="num">88</td><td class="num">25.6K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>171</td><td class="mono">HiDream-ai/HiDream-O1-Image</td><td>HiDream-ai</td><td>image-text-to-image</td><td>transformers</td><td class="num">436</td><td class="num">28.1K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>172</td><td class="mono">stabilityai/stable-audio-3-small-sfx</td><td>stabilityai</td><td>text-to-audio</td><td>stable-audio-3</td><td class="num">38</td><td class="num">4.5K</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>173</td><td class="mono">KevinJK51/Qwen3.6-12B-IQ-Ultra-Heretic-Uncensored-Thinking-V2-Hightop-GGUF</td><td>KevinJK51</td><td>text-generation</td><td>—</td><td class="num">24</td><td class="num">26.3K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>174</td><td class="mono">dphn/Dolphin-Mistral-24B-Venice-Edition</td><td>dphn</td><td>text-generation</td><td>transformers</td><td class="num">536</td><td class="num">13.5K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>175</td><td class="mono">google/embeddinggemma-300m</td><td>google</td><td>sentence-similarity</td><td>sentence-transformers</td><td class="num">1.7K</td><td class="num">1.9M</td><td><span class="pill vllm">vLLM / TEI</span></td></tr>
+      <tr><td>176</td><td class="mono">Qwen/Qwen3-Coder-30B-A3B-Instruct</td><td>Qwen</td><td>text-generation</td><td>transformers</td><td class="num">1.1K</td><td class="num">1.9M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>177</td><td class="mono">nvidia/parakeet-tdt-0.6b-v3</td><td>nvidia</td><td>automatic-speech-recognition</td><td>transformers</td><td class="num">873</td><td class="num">46.1K</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>178</td><td class="mono">facebook/dinov3-vitl16-pretrain-lvd1689m</td><td>facebook</td><td>image-feature-extraction</td><td>transformers</td><td class="num">305</td><td class="num">694.0K</td><td><span class="pill vllm">vLLM / TEI</span></td></tr>
+      <tr><td>179</td><td class="mono">fuckSelf/GPT-SoVITS-Russian</td><td>fuckSelf</td><td>text-to-speech</td><td>—</td><td class="num">19</td><td class="num">0</td><td><span class="pill speech">Whisper / NeMo</span></td></tr>
+      <tr><td>180</td><td class="mono">Alissonerdx/BFS-Best-Face-Swap</td><td>Alissonerdx</td><td>image-to-image</td><td>diffusers</td><td class="num">579</td><td class="num">98.4K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>181</td><td class="mono">Qwen/Qwen-Image-Edit-2511</td><td>Qwen</td><td>image-to-image</td><td>diffusers</td><td class="num">1.0K</td><td class="num">234.7K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>182</td><td class="mono">Qwen/Qwen-Image-2512</td><td>Qwen</td><td>text-to-image</td><td>diffusers</td><td class="num">856</td><td class="num">109.3K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>183</td><td class="mono">Qwen/Qwen3.5-122B-A10B</td><td>Qwen</td><td>image-text-to-text</td><td>transformers</td><td class="num">557</td><td class="num">855.9K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>184</td><td class="mono">dx8152/Flux2-Klein-9B-Consistency</td><td>dx8152</td><td>image-to-image</td><td>diffusers</td><td class="num">405</td><td class="num">39.5K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>185</td><td class="mono">datalab-to/chandra-ocr-2</td><td>datalab-to</td><td>image-text-to-text</td><td>transformers</td><td class="num">360</td><td class="num">1.7M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>186</td><td class="mono">opendatalab/MinerU2.5-Pro-2604-1.2B</td><td>opendatalab</td><td>image-text-to-text</td><td>transformers</td><td class="num">148</td><td class="num">617.9K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>187</td><td class="mono">nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-BF16</td><td>nvidia</td><td>any-to-any</td><td>transformers</td><td class="num">317</td><td class="num">501.7K</td><td><span class="pill omni">partial / specialized</span></td></tr>
+      <tr><td>188</td><td class="mono">bartowski/allura-org_Qwen3.6-35B-A3B-Anko-GGUF</td><td>bartowski</td><td>text-generation</td><td>—</td><td class="num">17</td><td class="num">5.2K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>189</td><td class="mono">joyfox/LTX2.3-ICEdit-Insight</td><td>joyfox</td><td>video-to-video</td><td>diffusers</td><td class="num">109</td><td class="num">34.3K</td><td><span class="pill diff">diffusers / ComfyUI</span></td></tr>
+      <tr><td>190</td><td class="mono">poolside/Laguna-XS.2</td><td>poolside</td><td>text-generation</td><td>transformers</td><td class="num">278</td><td class="num">210.2K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>191</td><td class="mono">HuggingFaceBio/Carbon-3B</td><td>HuggingFaceBio</td><td>other</td><td>transformers</td><td class="num">47</td><td class="num">4.9K</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>192</td><td class="mono">nvidia/DeepSeek-V4-Pro-NVFP4</td><td>nvidia</td><td>text-generation</td><td>Model Optimizer</td><td class="num">14</td><td class="num">1.5K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>193</td><td class="mono">UofTCSSLab/Maia3-79M</td><td>UofTCSSLab</td><td>other</td><td>—</td><td class="num">13</td><td class="num">0</td><td><span class="pill cv">Triton</span></td></tr>
+      <tr><td>194</td><td class="mono">virtuous7373/Gemma-4-Harmonia-31B</td><td>virtuous7373</td><td>image-text-to-text</td><td>transformers</td><td class="num">13</td><td class="num">166</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>195</td><td class="mono">Jackrong/Qwopus3.6-27B-v2-MLX-4bit</td><td>Jackrong</td><td>text-generation</td><td>mlx</td><td class="num">13</td><td class="num">2.2K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>196</td><td class="mono">YTan2000/Qwopus3.6-27B-v2-TQ3_4S</td><td>YTan2000</td><td>image-text-to-text</td><td>gguf</td><td class="num">13</td><td class="num">945</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>197</td><td class="mono">llmfan46/Qwen3.5-35B-A3B-uncensored-heretic-v2-Native-MTP-Preserved-GGUF</td><td>llmfan46</td><td>image-text-to-text</td><td>transformers</td><td class="num">13</td><td class="num">5.3K</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>198</td><td class="mono">stepfun-ai/Step-3.7-Flash-NVFP4</td><td>stepfun-ai</td><td>image-text-to-text</td><td>transformers</td><td class="num">13</td><td class="num">769</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>199</td><td class="mono">Qwen/Qwen2.5-7B-Instruct</td><td>Qwen</td><td>text-generation</td><td>transformers</td><td class="num">1.3K</td><td class="num">13.0M</td><td><span class="pill vllm">vLLM</span></td></tr>
+      <tr><td>200</td><td class="mono">Qwen/Qwen2.5-1.5B-Instruct</td><td>Qwen</td><td>text-generation</td><td>transformers</td><td class="num">719</td><td class="num">14.7M</td><td><span class="pill vllm">vLLM</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="key">
+    <span class="pill vllm">vLLM</span> generative text / vision-language / embeddings
+    <span class="pill diff">diffusers / ComfyUI</span> image &amp; video generation
+    <span class="pill speech">Whisper / NeMo</span> speech &amp; audio
+    <span class="pill cv">Triton</span> classic CV, encoders, other
+    <span class="pill omni">partial</span> any-to-any / specialized
+  </div>
+  <p class="footnote">Task inferred from <code>pipeline_tag</code>; ~15% lacked one and were inferred from tags/library.
+     Every HF model is open-weight (downloadable), so unlike OpenRouter there is no "API only" category, the only question is which engine.</p>
+  </div>
+
+  <h2>4. HF trending vs OpenRouter: why the engine mix differs</h2>
+  <div class="panel">
+  <table>
+    <thead><tr><th>Catalog</th><th>What it ranks</th><th>vLLM coverage</th><th>Engines you actually need</th></tr></thead>
+    <tbody>
+      <tr><td>OpenRouter (top-weekly)</td><td>Hosted chat/agent API usage (token volume)</td><td><span class="pill vllm">~99%</span></td><td>vLLM (+ Triton for the rare non-LLM)</td></tr>
+      <tr><td>Hugging Face (trending)</td><td>Community interest across all ML tasks</td><td><span class="pill vllm">~56%</span></td><td>vLLM + diffusers + speech stack + Triton</td></tr>
+    </tbody>
+  </table>
+  <p class="footnote">OpenRouter is an inference-API marketplace, so its catalog is almost entirely text-generation. HF trending
+     reflects the whole open-model research frontier, where image/video generation and speech are first-class, hence the much broader engine requirement.</p>
+  </div>
+
+  <h2>5. Recommendation for infaas</h2>
+  <div class="panel lead">
+    <ul class="takeaway" style="margin:0">
+      <li><b>vLLM remains the primary engine</b> and covers the single biggest slice (text + vision-language, ~56%).</li>
+      <li><b>Triton is essential here, not optional</b>, as the multi-backend home for classic CV, encoders, and as a wrapper
+          for diffusion/speech via its Python backend.</li>
+      <li><b>Add a diffusion path (diffusers / ComfyUI) and a speech path (faster-whisper / NeMo)</b> if you want to serve the
+          trending frontier, together that is ~31% of the list that neither vLLM nor a plain Triton ONNX backend handles turnkey.</li>
+      <li><b>No "API only" gap:</b> every HF model is open-weight, so coverage is purely an engine-capability question, not a licensing one.</li>
+    </ul>
+  </div>
+  <p class="footnote">Source: Hugging Face <a href="https://huggingface.co/api/models?sort=trendingScore&limit=200">models API</a>
+     (<code>sort=trendingScore</code>, top 200, <code>full=true</code>). Captured May 2026. Engine mapping is by task family and is an
+     architecture-capability estimate, not a per-checkpoint guarantee.</p>
+
+</div></body></html>
